@@ -664,7 +664,12 @@ ERR detach_SB(SimpleBitIO* pSB)
 //================================================================
 // Memory access functions
 //================================================================
-#if (defined(WIN32) && !defined(UNDER_CE)) || (defined(UNDER_CE) && defined(_ARM_))
+// MSVC defines _WIN32, not WIN32, so it would take the "other platform"
+// branch below and define a function its own CRT already provides - and at
+// /O2 (which implies /Oi) that is error C2169, because the compiler then
+// treats the name as an intrinsic that must not be defined. MSVC's CRT has
+// it, so MSVC takes the Windows branch like a real Win32 build does.
+#if (defined(WIN32) && !defined(UNDER_CE)) || (defined(UNDER_CE) && defined(_ARM_)) || defined(_MSC_VER)
 // WinCE ARM and Desktop x86
 #else
 // other platform

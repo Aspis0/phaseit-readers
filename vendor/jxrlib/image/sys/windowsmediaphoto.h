@@ -34,6 +34,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+// The ANSI build has no <windows.h>, and the wide-character string functions
+// live in <wchar.h> there: <string.h> declares the narrow ones only.
+// JXRGlueJxr.c calls wcslen, and a call to a function that was never declared
+// is an error in C99+ - clang rejects the build.
+#ifdef __ANSI__
+#include <wchar.h>
+#endif
 
 #if defined(__cplusplus) && !defined(EXTERN_C)
 #define EXTERN_C extern "C"
