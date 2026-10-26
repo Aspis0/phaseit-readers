@@ -7,6 +7,19 @@
 *.tif -text
 *.jxr -text
 
+# Everything under tests/fixtures/ is test input, not source: the data files
+# are binary, and the generators and manifests beside them are kept byte for
+# byte as well, so that a fixture means the same thing on every platform. The
+# CI check .github/scripts/check-gitattributes.sh asks for `text: unset` on
+# every fixture, so a fixture added later with a new extension cannot be
+# rewritten by an end-of-line filter.
+tests/fixtures/** -text
+
+# The workflow and its scripts are read by the workflow parser and by bash,
+# and neither of them wants CRLF: a shell script with CRLF line endings fails
+# on the runner that checks it out.
+.github/** text eol=lf
+
 # The vendored jxrlib tree is kept byte for byte as upstream shipped it at
 # 19cc1fa19ca6607449d210aea946b3187f808f2c, apart from the one functional patch
 # recorded in vendor/jxrlib/PATCHES.md. The tree is not UTF-8: the C sources

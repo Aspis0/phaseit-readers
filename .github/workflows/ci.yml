@@ -1,0 +1,134 @@
+# CI for the phasit-imread crate.
+#
+# What a green run proves: the crate builds and its tests pass on Linux, macOS
+# and Windows, with and without the optional jpegxr feature - which compiles
+# the vendored jxrlib tree with the platform C compiler.
+#
+# What a green run does not prove: the tests that read a real acquisition file
+# have nothing to read here. They skip, and cargo counts a skipped test as
+# passed, so every run lists the skips in its job summary.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer run of the same ref makes the running one pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, features=${{ matrix.features || 'default' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # One broken platform must not hide the state of the others.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        features: ["", "jpegxr"]
+    env:
+      # CI has no real acquisition files, and says so: the three variables are
+      # set to the empty string rather than left unset, so that a value
+      # reaching the runner by any other route cannot point the tests at
+      # somebody's disk. An empty PHASIT_REAL_DATA_DIR counts as unset, and an
+      # empty PHASIT_REAL_DATA_REQUIRED means "this run does not need the
+      # data", so the tests that need the files skip instead of failing.
+      # Every skip is listed in the job summary: cargo counts a skipped test
+      # as passed, and a run that hides its skips would be green for the wrong
+      # reason.
+      PHASIT_REAL_DATA_DIR: ""
+      PHASIT_REAL_DATA_REQUIRED: ""
+      PHASIT_CZI_BGR_SAMPLE: ""
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2
+        with:
+          # One cache per platform and feature set: the C build of the jpegxr
+          # leg must not evict the pure Rust artifacts of the default leg.
+          key: ${{ matrix.os }}-${{ matrix.features || 'default' }}
+
+      - name: Build
+        shell: bash
+        run: cargo build --locked --all-targets --features "${{ matrix.features }}"
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/cargo-test.log"
+          # The pipeline is the one place where a failure must not stop the
+          # script: the summary below has to be written even when a test
+          # fails, and the exit code of the run is cargo's own.
+          set +e
+          cargo test --locked --features "${{ matrix.features }}" -- --nocapture 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          # A summary that cannot be written is worth a line in the log, but it
+          # does not decide the run: cargo's exit code does.
+          bash .github/scripts/report-skips.sh "$log" || true
+          exit "$status"
+
+  ndarray:
+    name: ndarray (compile only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2
+        with:
+          key: ndarray
+
+      - name: Build
+        shell: bash
+        # The ndarray feature gates no test that can run without the real
+        # acquisition files, so this job proves one thing only: the crate
+        # compiles with the feature on. It runs no test.
+        run: cargo build --locked --all-targets --features ndarray
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2
+        with:
+          key: package
+
+      - name: Package
+        shell: bash
+        # Builds the tarball that would be published, and compiles it, so a
+        # file missing from the package fails here rather than at publish time.
+        run: cargo package --locked
+
+      - name: The tarball must carry the vendored jxrlib tree
+        shell: bash
+        # The jpegxr feature compiles vendor/jxrlib, so a tarball without it
+        # would ship a feature that cannot build.
+        run: tar -tzf target/package/phasit-imread-*.crate | grep -c 'vendor/jxrlib/'
+
+  gitattributes:
+    name: gitattributes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+
+      - name: Every binary file must be marked -text
+        shell: bash
+        run: bash .github/scripts/check-gitattributes.sh
