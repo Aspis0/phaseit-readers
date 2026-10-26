@@ -7,13 +7,18 @@
 *.tif -text
 *.jxr -text
 
-# Everything under tests/fixtures/ is test input, not source: the data files
-# are binary, and the generators and manifests beside them are kept byte for
-# byte as well, so that a fixture means the same thing on every platform. The
-# CI check .github/scripts/check-gitattributes.sh asks for `text: unset` on
-# every fixture, so a fixture added later with a new extension cannot be
-# rewritten by an end-of-line filter.
-tests/fixtures/** -text
+# Everything under tests/fixtures/ is test input, not source. The data files
+# are the four binary extensions above and stay byte for byte; the manifests
+# and the generators beside them are text, and are kept with LF line endings
+# on every platform, so that a fixture means the same thing everywhere: the
+# generators write the manifests in text mode, which on Windows means CRLF,
+# and a CRLF manifest would differ from the committed one on every platform.
+# The CI check .github/scripts/check-gitattributes.sh asks for `text: unset`
+# on every binary file and for `text: set` with `eol: lf` on every text
+# fixture, so a fixture added later cannot be rewritten by an end-of-line
+# filter without being named here first.
+tests/fixtures/**/manifest.json text eol=lf
+tests/fixtures/**/gen_*_fixtures.py text eol=lf
 
 # The workflow and its scripts are read by the workflow parser and by bash,
 # and neither of them wants CRLF: a shell script with CRLF line endings fails
@@ -21,8 +26,8 @@ tests/fixtures/** -text
 .github/** text eol=lf
 
 # The vendored jxrlib tree is kept byte for byte as upstream shipped it at
-# 19cc1fa19ca6607449d210aea946b3187f808f2c, apart from the one functional patch
-# recorded in vendor/jxrlib/PATCHES.md. The tree is not UTF-8: the C sources
+# 19cc1fa19ca6607449d210aea946b3187f808f2c, apart from the patches recorded
+# in vendor/jxrlib/PATCHES.md. The tree is not UTF-8: the C sources
 # and headers are Windows-1252 (a 0xA9 sign and 0x95 bullets), doc/readme.txt
 # carries 0x93, 0x94 and 0x99, the .vcxproj files are UTF-8 with a BOM,
 # Makefile.reference carries upstream's own U+FFFD bytes, and PATCHES.md and

@@ -47,7 +47,9 @@ rest rather than guess:
   its own reason.
 - **CZI** — uncompressed, Zstd0 and Zstd1 subblocks. JpgFile (1) and LZW (2)
   are refused. JPEG-XR (4) is refused unless the crate is built with
-  `--features jpegxr`, which needs a C toolchain; even then a
+  `--features jpegxr`, which needs a C toolchain (MSVC on Windows, gcc or
+  clang on Linux and macOS; MinGW-w64 is not supported, see
+  `vendor/jxrlib/PATCHES.md`); even then a
   JPEG-XR-compressed Gray32Float or Bgr48 tile is refused (an uncompressed
   one is decoded), and so are subblocks that pack several values of one axis
   (line-scan style) — that one fails the open of the whole file, it is not a

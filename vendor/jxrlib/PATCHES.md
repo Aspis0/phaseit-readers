@@ -52,7 +52,7 @@ Patches
 
 ### 2. Declare `_byteswap_ulong` where it is defined, so clang can build the tree
 
-- **File:** `image/sys/strcodec.h`, lines 41-56 of the vendored file — the header
+- **File:** `image/sys/strcodec.h`, lines 41-57 of the vendored file — the header
   that both `image/sys/strcodec.c` (which defines the function) and
   `image/decode/segdec.c` (which calls it) include.
 - **Upstream bug:** no header declares `_byteswap_ulong`, so `segdec.c` calls it
@@ -77,8 +77,11 @@ Patches
   The definition exists only when neither `(WIN32 && !UNDER_CE)` nor
   `(UNDER_CE && _ARM_)` nor `_MSC_VER` holds, and only when `_BIG__ENDIAN_` is not
   set: on big-endian `strcodec.c` defines a macro instead (`#define _byteswap_ulong(x) (x)`),
-  which a declaration would break, and where the CRT provides the function - Win32
-  and MSVC alike - declaring it there would clash with the CRT's own declaration.
+  which a declaration would break. The condition is a mirror of the definition's
+  own condition, and it is keyed to the build macros of the toolchain - `WIN32`
+  for the Win32 SDK and the VC builds, `_MSC_VER` for MSVC - not to the question
+  of which C runtime provides the function. "Toolchains" below says what that
+  means for MinGW.
 - **Amendment (`_MSC_VER` in the first alternative):** MSVC defines `_WIN32`, not
   `WIN32`, so MSVC used to take the "other platform" branch of this header, and of
   `strcodec.c` alike. That was wrong twice over. `strcodec.c` defined a function
@@ -125,8 +128,9 @@ Patches
 
 ### 4. `<wchar.h>` for the ANSI build: `wcslen` was called without a declaration
 
-- **File:** `image/sys/windowsmediaphoto.h`, the block of system includes at the
-  top of the file (after `#include <string.h>`).
+- **File:** `image/sys/windowsmediaphoto.h`, lines 37-43 of the vendored file —
+  the block of system includes at the top of the file (after
+  `#include <string.h>`).
 - **Upstream bug:** `jxrgluelib/JXRGlueJxr.c` calls `wcslen`, but no header in
   scope declares it. `<string.h>` declares the narrow string functions only; the
   wide-character ones live in `<wchar.h>`. The ANSI build has no `<windows.h>` to
@@ -159,7 +163,8 @@ Patches
 
 ### 5. `<stdlib.h>` in `segdec.c`, where the CRT's `_byteswap_ulong` is declared
 
-- **File:** `image/decode/segdec.c`, the include block at the top of the file.
+- **File:** `image/decode/segdec.c`, lines 29-31 of the vendored file — the
+  include block at the top of the file.
 - **Why:** after patch 3, MSVC no longer gets `_byteswap_ulong` from `strcodec.h`;
   it gets it from its own CRT, and that declaration lives in `<stdlib.h>`. On the
   ANSI build `strcodec.h` declares the function and `<stdlib.h>` is not needed for
@@ -177,6 +182,37 @@ Patches
   vendored `image/decode/segdec.c` and upstream's file; deleting the 3 added lines
   reproduces upstream's bytes exactly, line endings (LF) included. Checked against
   upstream at 19cc1fa, byte for byte.
+
+Toolchains
+----------
+
+The crate compiles this tree with `build.rs`, which defines `__ANSI__` and
+hands the sources to the platform C compiler. The toolchains the `jpegxr`
+feature is built with are:
+
+- MSVC on Windows, which the `.vcxproj` projects and `build.rs` target;
+- gcc and clang on Linux and macOS, in the ANSI build.
+
+**MinGW-w64 is not a supported compiler for the `jpegxr` feature**, and
+patches 2 and 3 are not MinGW-aware. The condition they share is keyed to
+the build macros of the toolchain - `WIN32` for the Win32 SDK and the VC
+builds, `_MSC_VER` for MSVC - and not to the question of which C runtime
+provides the function. mingw-w64's compiler defines `_WIN32`, and its headers
+nowhere define `WIN32`, so a MinGW build takes the `#else` branch
+of that condition: the tree declares `U32 _byteswap_ulong(U32 bits)` in
+`strcodec.h` (`U32` is `unsigned int`) and defines the function in
+`strcodec.c`, while mingw-w64's C runtime already declares
+`unsigned long _byteswap_ulong(unsigned long)` in its `crt/stdlib.h` - a
+conflicting declaration, and a clash with the definition upstream's own
+`strcodec.c` already had. The declaration in the header (patch 2) only
+spreads that clash to the 19 translation units that include `strcodec.h`.
+
+The alternative - making the condition MinGW-aware - was not taken: it
+would add a sixth patch to the vendored delta, and every patch here is a
+range that has to be re-verified against upstream on every bump of the
+vendored commit, while the toolchain is not built by any CI leg and so
+could not be tested. Documenting the toolchains the tree is built with
+costs nothing and cannot rot.
 
 Vendoring additions (no upstream counterpart)
 ---------------------------------------------

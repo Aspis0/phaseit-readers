@@ -91,7 +91,7 @@ jobs:
           exit "$status"
 
   ndarray:
-    name: ndarray (compile only)
+    name: ndarray
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -103,10 +103,18 @@ jobs:
 
       - name: Build
         shell: bash
-        # The ndarray feature gates no test that can run without the real
-        # acquisition files, so this job proves one thing only: the crate
-        # compiles with the feature on. It runs no test.
+        # Every target has to compile with the feature on, the integration
+        # tests included; the test below builds the lib target only.
         run: cargo build --locked --all-targets --features ndarray
+
+      - name: Test
+        shell: bash
+        # The ndarray feature gates one lib unit test that needs no real
+        # acquisition file - plane_to_ndarray_roundtrip in src/types.rs - so
+        # this job runs it instead of only compiling it: --lib builds the lib
+        # test target and runs every unit test in it, the ndarray-gated one
+        # included.
+        run: cargo test --locked --features ndarray --lib
 
   package:
     name: package
@@ -125,11 +133,39 @@ jobs:
         # file missing from the package fails here rather than at publish time.
         run: cargo package --locked
 
-      - name: The tarball must carry the vendored jxrlib tree
+      - name: The tarball must carry the whole vendored jxrlib tree, and it must build
         shell: bash
-        # The jpegxr feature compiles vendor/jxrlib, so a tarball without it
-        # would ship a feature that cannot build.
-        run: tar -tzf target/package/phasit-imread-*.crate | grep -c 'vendor/jxrlib/'
+        # cargo package verifies the tarball with the default features, where
+        # jpegxr is off and the vendored C is never compiled - so that check
+        # cannot see a tarball whose vendor tree is broken. Here the tarball
+        # is unpacked and built with the feature on, and the number of
+        # vendored files it carries is compared with the number the tree has:
+        # a tarball that drops one of them, or that carries one that does not
+        # compile, fails here rather than at publish time.
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          crates=(target/package/phasit-imread-*.crate)
+          if [ "${#crates[@]}" -ne 1 ]; then
+            echo "expected exactly one .crate in target/package, found ${#crates[@]}: ${crates[*]:-none}" >&2
+            exit 1
+          fi
+          crate=${crates[0]}
+          echo "tarball: $crate"
+
+          packed=$(tar -tzf "$crate" | grep -c '/vendor/jxrlib/' || true)
+          expected=$(git ls-files vendor/jxrlib | wc -l)
+          if [ "$packed" -ne "$expected" ]; then
+            echo "the tarball carries $packed vendor/jxrlib file(s), the tree has $expected" >&2
+            exit 1
+          fi
+          echo "the tarball carries all $expected vendored file(s)"
+
+          work=$(mktemp -d)
+          tar -xzf "$crate" -C "$work"
+          unpacked=$(find "$work" -mindepth 1 -maxdepth 1 -type d)
+          ( cd "$unpacked" && cargo build --locked --features jpegxr )
+          ( cd "$unpacked" && cargo build --locked --release --features jpegxr )
 
   gitattributes:
     name: gitattributes
@@ -138,6 +174,6 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
 
-      - name: Every binary file must be marked -text
+      - name: The end-of-line policy must match the files
         shell: bash
         run: bash .github/scripts/check-gitattributes.sh
