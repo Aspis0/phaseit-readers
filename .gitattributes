@@ -1,0 +1,18 @@
+# The binary fixtures must not be rewritten by an end-of-line filter. A file
+# that happens to hold no NUL byte is otherwise taken for text, and the CRLF
+# conversion corrupts it: the constant u16 planes are exactly that case -
+# 0x0A bytes, so every second byte became a line ending on checkout.
+*.bin -text
+*.raw -text
+*.tif -text
+*.jxr -text
+
+# The vendored jxrlib tree is kept byte for byte as upstream shipped it at
+# 19cc1fa19ca6607449d210aea946b3187f808f2c, apart from the one functional patch
+# recorded in vendor/jxrlib/PATCHES.md. The tree is not UTF-8: the C sources
+# and headers are Windows-1252 (a 0xA9 sign and 0x95 bullets), doc/readme.txt
+# carries 0x93, 0x94 and 0x99, the .vcxproj files are UTF-8 with a BOM,
+# Makefile.reference carries upstream's own U+FFFD bytes, and PATCHES.md and
+# LICENSE are UTF-8. An end-of-line filter would rewrite them, so the tree is
+# marked as binary.
+vendor/** -text

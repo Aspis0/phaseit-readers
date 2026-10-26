@@ -1,0 +1,54 @@
+{
+  "generator": "gen_jpegxr_fixtures.py",
+  "note": "Every fixture is an imagecodecs JPEG-XR codestream; the .raw file is the expected decode.",
+  "fixtures": [
+    {
+      "name": "gray8_ramp",
+      "dtype": "u8",
+      "samples": 1,
+      "stored_x": 37,
+      "stored_y": 24,
+      "jxr": "gray8_ramp.jxr",
+      "raw": "gray8_ramp.raw",
+      "jxr_size": 640,
+      "raw_size": 888,
+      "note": "grayscale; raw == decode output directly"
+    },
+    {
+      "name": "gray16_gradient",
+      "dtype": "u16",
+      "samples": 1,
+      "stored_x": 41,
+      "stored_y": 19,
+      "jxr": "gray16_gradient.jxr",
+      "raw": "gray16_gradient.raw",
+      "jxr_size": 1025,
+      "raw_size": 1558,
+      "note": "grayscale; raw == decode output directly"
+    },
+    {
+      "name": "gray16_extremes",
+      "dtype": "u16",
+      "samples": 1,
+      "stored_x": 32,
+      "stored_y": 16,
+      "jxr": "gray16_extremes.jxr",
+      "raw": "gray16_extremes.raw",
+      "jxr_size": 301,
+      "raw_size": 1024,
+      "note": "grayscale; raw == decode output directly"
+    },
+    {
+      "name": "bgr24_channels",
+      "dtype": "u8",
+      "samples": 3,
+      "stored_x": 20,
+      "stored_y": 12,
+      "jxr": "bgr24_channels.jxr",
+      "raw": "bgr24_channels.raw",
+      "jxr_size": 517,
+      "raw_size": 720,
+      "note": "color; raw is native BGR (RGB reversed) \u2014 the CZI reader swaps to RGB later"
+    }
+  ]
+}

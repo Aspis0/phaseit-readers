@@ -1,0 +1,9 @@
+# Cargo build artifacts.
+/target/
+
+# Python bytecode from the fixture generators and the parity harness.
+__pycache__/
+*.pyc
+
+# Real acquisition files and generated reference planes: never committed.
+tests/fixtures/*_real/

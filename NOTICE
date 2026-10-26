@@ -1,0 +1,11 @@
+phasit-imread
+Copyright 2026 Eclose
+
+This product includes software developed by third parties:
+
+- tifffile, liffile and czifile, by Christoph Gohlke (BSD-3-Clause)
+- nd2, by Talley Lambert (BSD-3-Clause)
+- jxrlib, by Microsoft Corporation (BSD-2-Clause)
+
+Their copyright notices, licences and disclaimers are reproduced in
+THIRD-PARTY-NOTICES.md.

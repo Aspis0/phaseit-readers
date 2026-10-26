@@ -1,0 +1,203 @@
+{
+ "generator": "gen_tiff_fixtures.py",
+ "note": "Every fixture states exactly what its entry says; the reader must publish that.",
+ "fixtures": [
+  {
+   "file": "palette-8bit.tif",
+   "what": "one indexed page: the pixel is an index into a 256-entry palette",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 1,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "U8",
+   "samples": 1,
+   "paletteEntries": 256,
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "000102030405060708090a0b"
+    }
+   ]
+  },
+  {
+   "file": "rgb-per-sampleformat.tif",
+   "what": "an RGB page whose SampleFormat is stated once per sample (the shape the tiff crate refuses)",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 1,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "U8",
+   "samples": 3,
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "00102030405060708090a0b001112131415161718191a1b102122232425262728292a2b2"
+    }
+   ]
+  },
+  {
+   "file": "rgba-8bit.tif",
+   "what": "an RGB page with an alpha sample: four samples in one pixel",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 1,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "U8",
+   "samples": 4,
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "0008101820283038404850586068707801091119212931394149515961697179020a121a222a323a424a525a626a727a"
+    }
+   ]
+  },
+  {
+   "file": "imagej-hyperstack.tif",
+   "what": "an ImageJ hyperstack: 2 channels x 2 slices, stored channel-first",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 2,
+    "z": 2,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "U8",
+   "samples": 1,
+   "pxSizeUm": {
+    "x": 1.5,
+    "y": 1.5,
+    "z": 1.5
+   },
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "000102030405060708090a0b"
+    },
+    {
+     "t": 0,
+     "c": 1,
+     "z": 0,
+     "hex": "0a0b0c0d0e0f101112131415"
+    },
+    {
+     "t": 0,
+     "c": 0,
+     "z": 1,
+     "hex": "6465666768696a6b6c6d6e6f"
+    },
+    {
+     "t": 0,
+     "c": 1,
+     "z": 1,
+     "hex": "6e6f70717273747576777879"
+    }
+   ]
+  },
+  {
+   "file": "int16-gray.tif",
+   "what": "a signed 16-bit page (SampleFormat=2)",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 1,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "I16",
+   "samples": 1,
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "a8fd0cfe70fed4fea8fd0cfe70fed4fea8fd0cfe70fed4fe"
+    }
+   ]
+  },
+  {
+   "file": "float32-gray.tif",
+   "what": "a float page (SampleFormat=3, 32-bit)",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 1,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "F32",
+   "samples": 1,
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "000000000000803e0000003f0000403f0000803e0000003f0000403f0000803f0000003f0000403f0000803f0000a03f"
+    }
+   ]
+  },
+  {
+   "file": "two-series.ome.tif",
+   "what": "an OME-TIFF with two scenes: the second scene's plane is the second IFD",
+   "scenes": 2,
+   "sceneDims": [
+    {
+     "t": 1,
+     "c": 1,
+     "z": 1,
+     "y": 3,
+     "x": 4,
+     "dtype": "U16",
+     "samples": 1
+    },
+    {
+     "t": 1,
+     "c": 1,
+     "z": 1,
+     "y": 2,
+     "x": 2,
+     "dtype": "U8",
+     "samples": 1
+    }
+   ],
+   "planes": [
+    {
+     "scene": 0,
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "00006400c8002c0101006500c9002d0102006600ca002e01"
+    },
+    {
+     "scene": 1,
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "00010102"
+    }
+   ]
+  }
+ ]
+}

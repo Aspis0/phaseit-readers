@@ -1,0 +1,202 @@
+{
+  "generator": "gen_zstd_fixtures.py",
+  "note": "Every fixture is an imagecodecs Zstd0/Zstd1 stream; the .raw file is the expected decode.",
+  "fixtures": [
+    {
+      "name": "const_u16__zstd0",
+      "variant": "zstd0",
+      "hilo": false,
+      "shape": [
+        48,
+        64
+      ],
+      "itemsize": 2,
+      "bin": "const_u16__zstd0.bin",
+      "raw": "const_u16__zstd0.raw",
+      "bin_size": 19,
+      "raw_size": 6144
+    },
+    {
+      "name": "const_u16__zstd1",
+      "variant": "zstd1",
+      "hilo": false,
+      "shape": [
+        48,
+        64
+      ],
+      "itemsize": 2,
+      "bin": "const_u16__zstd1.bin",
+      "raw": "const_u16__zstd1.raw",
+      "bin_size": 20,
+      "raw_size": 6144
+    },
+    {
+      "name": "const_u16__zstd1hilo",
+      "variant": "zstd1hilo",
+      "hilo": true,
+      "shape": [
+        48,
+        64
+      ],
+      "itemsize": 2,
+      "bin": "const_u16__zstd1hilo.bin",
+      "raw": "const_u16__zstd1hilo.raw",
+      "bin_size": 26,
+      "raw_size": 6144
+    },
+    {
+      "name": "gradient_u16__zstd0",
+      "variant": "zstd0",
+      "hilo": false,
+      "shape": [
+        64,
+        64
+      ],
+      "itemsize": 2,
+      "bin": "gradient_u16__zstd0.bin",
+      "raw": "gradient_u16__zstd0.raw",
+      "bin_size": 7048,
+      "raw_size": 8192
+    },
+    {
+      "name": "gradient_u16__zstd1",
+      "variant": "zstd1",
+      "hilo": false,
+      "shape": [
+        64,
+        64
+      ],
+      "itemsize": 2,
+      "bin": "gradient_u16__zstd1.bin",
+      "raw": "gradient_u16__zstd1.raw",
+      "bin_size": 7049,
+      "raw_size": 8192
+    },
+    {
+      "name": "gradient_u16__zstd1hilo",
+      "variant": "zstd1hilo",
+      "hilo": true,
+      "shape": [
+        64,
+        64
+      ],
+      "itemsize": 2,
+      "bin": "gradient_u16__zstd1hilo.bin",
+      "raw": "gradient_u16__zstd1hilo.raw",
+      "bin_size": 339,
+      "raw_size": 8192
+    },
+    {
+      "name": "random12_u16__zstd0",
+      "variant": "zstd0",
+      "hilo": false,
+      "shape": [
+        96,
+        80
+      ],
+      "itemsize": 2,
+      "bin": "random12_u16__zstd0.bin",
+      "raw": "random12_u16__zstd0.raw",
+      "bin_size": 13176,
+      "raw_size": 15360
+    },
+    {
+      "name": "random12_u16__zstd1",
+      "variant": "zstd1",
+      "hilo": false,
+      "shape": [
+        96,
+        80
+      ],
+      "itemsize": 2,
+      "bin": "random12_u16__zstd1.bin",
+      "raw": "random12_u16__zstd1.raw",
+      "bin_size": 13177,
+      "raw_size": 15360
+    },
+    {
+      "name": "random12_u16__zstd1hilo",
+      "variant": "zstd1hilo",
+      "hilo": true,
+      "shape": [
+        96,
+        80
+      ],
+      "itemsize": 2,
+      "bin": "random12_u16__zstd1hilo.bin",
+      "raw": "random12_u16__zstd1hilo.raw",
+      "bin_size": 13179,
+      "raw_size": 15360
+    },
+    {
+      "name": "extremes_u16__zstd0",
+      "variant": "zstd0",
+      "hilo": false,
+      "shape": [
+        8,
+        32
+      ],
+      "itemsize": 2,
+      "bin": "extremes_u16__zstd0.bin",
+      "raw": "extremes_u16__zstd0.raw",
+      "bin_size": 26,
+      "raw_size": 512
+    },
+    {
+      "name": "extremes_u16__zstd1",
+      "variant": "zstd1",
+      "hilo": false,
+      "shape": [
+        8,
+        32
+      ],
+      "itemsize": 2,
+      "bin": "extremes_u16__zstd1.bin",
+      "raw": "extremes_u16__zstd1.raw",
+      "bin_size": 27,
+      "raw_size": 512
+    },
+    {
+      "name": "extremes_u16__zstd1hilo",
+      "variant": "zstd1hilo",
+      "hilo": true,
+      "shape": [
+        8,
+        32
+      ],
+      "itemsize": 2,
+      "bin": "extremes_u16__zstd1hilo.bin",
+      "raw": "extremes_u16__zstd1hilo.raw",
+      "bin_size": 27,
+      "raw_size": 512
+    },
+    {
+      "name": "u8_plane__zstd0",
+      "variant": "zstd0",
+      "hilo": false,
+      "shape": [
+        40,
+        40
+      ],
+      "itemsize": 1,
+      "bin": "u8_plane__zstd0.bin",
+      "raw": "u8_plane__zstd0.raw",
+      "bin_size": 1610,
+      "raw_size": 1600
+    },
+    {
+      "name": "u8_plane__zstd1",
+      "variant": "zstd1",
+      "hilo": false,
+      "shape": [
+        40,
+        40
+      ],
+      "itemsize": 1,
+      "bin": "u8_plane__zstd1.bin",
+      "raw": "u8_plane__zstd1.raw",
+      "bin_size": 1611,
+      "raw_size": 1600
+    }
+  ]
+}
