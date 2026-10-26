@@ -64,6 +64,15 @@ jobs:
         shell: bash
         run: cargo build --locked --all-targets --features "${{ matrix.features }}"
 
+      - name: Build (release)
+        if: matrix.features == 'jpegxr'
+        shell: bash
+        # The release profile compiles the vendored jxrlib C at /O2, which is
+        # where that tree used to break: the debug build passed and the release
+        # build did not, so only a release build catches it. jpegxr is the one
+        # feature that compiles C, so this step is the one that needs it.
+        run: cargo build --release --locked --features jpegxr
+
       - name: Test
         shell: bash
         run: |

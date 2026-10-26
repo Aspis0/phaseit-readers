@@ -42,10 +42,11 @@
 // strcodec.c defines _byteswap_ulong where the CRT does not provide it,
 // and image/decode/segdec.c calls it. The condition below mirrors the one
 // in strcodec.c exactly: the definition exists only when neither
-// (WIN32 && !UNDER_CE) nor (UNDER_CE && _ARM_) is set, and only when
-// _BIG__ENDIAN_ is not (on big-endian strcodec.c defines a macro instead,
-// which a declaration would break).
-#if (defined(WIN32) && !defined(UNDER_CE)) || (defined(UNDER_CE) && defined(_ARM_))
+// (WIN32 && !UNDER_CE) nor (UNDER_CE && _ARM_) nor _MSC_VER is set, and
+// only when _BIG__ENDIAN_ is not (on big-endian strcodec.c defines a macro
+// instead, which a declaration would break). MSVC's CRT declares the
+// function itself, so declaring it here would clash with that declaration.
+#if (defined(WIN32) && !defined(UNDER_CE)) || (defined(UNDER_CE) && defined(_ARM_)) || defined(_MSC_VER)
 // WinCE ARM and Desktop x86
 #else
 // other platform

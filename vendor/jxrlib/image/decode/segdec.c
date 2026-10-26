@@ -26,6 +26,9 @@
 //
 //*@@@---@@@@******************************************************************
 
+// <stdlib.h> is where the CRT declares _byteswap_ulong (MSVC); where
+// strcodec.c defines it instead, strcodec.h declares it.
+#include <stdlib.h>
 #include "strcodec.h"
 #include "decode.h"
 
