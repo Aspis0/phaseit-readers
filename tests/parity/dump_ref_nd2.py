@@ -3,7 +3,7 @@ native-endian raw bytes, so the pure-Rust ND2 reader can be checked byte-exact
 against the `nd2` (BSD-3, Lambert) reference decode — WITHOUT committing the
 411 MB third-party file or the multi-MB plane dumps (both gitignored).
 
-Emits, into tests/fixtures/nd2_real/ :
+Emits, into crates/phasit-imread/tests/fixtures/nd2_real/ :
   nd2_plane_s{scene}_t{t}_c{c}_z{z}.raw  -- the exact native-LE bytes phasit's
                                             reader.plane(scene,t,c,z).data must equal
   manifest_real.json                     -- geometry + list of dumped planes
@@ -17,7 +17,11 @@ import numpy as np
 import nd2
 
 SRC = sys.argv[1]
-OUT = os.path.dirname(os.path.abspath(__file__))
+# The ND2 test reads crates/phasit-imread/tests/fixtures/nd2_real/, not this
+# folder, so the dumps must land there to be picked up.
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(os.path.dirname(HERE), "fixtures", "nd2_real")
+os.makedirs(OUT, exist_ok=True)
 
 f = nd2.ND2File(SRC)
 sizes = dict(f.sizes)              # e.g. {'Z':25,'Y':2868,'X':2868}

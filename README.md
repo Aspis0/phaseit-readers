@@ -108,8 +108,8 @@ the cargo summary, so read the `skipping:` messages (run the suite with
 |---|---|
 | `czi/mosaic.czi` | a Zeiss CZI of several tiles per (C,Z), composed into one scene |
 | `czi/stitched.czi` | a pre-stitched Zeiss CZI, one tile per (C,Z) |
-| `lif/control.lif` | a Leica LIF with one image in the `.lif` |
-| `lif/four-scene.lif` | a Leica LIF with four images in the `.lif` |
+| `lif/control.lif` | a Leica LIF with four images in the `.lif` |
+| `lif/four-scene.lif` | a Leica LIF with four series and a companion `.lifext` |
 | `lsm/stack.lsm` | a Zeiss LSM stack |
 | `nd2/stack.nd2` | a Nikon ND2 stack |
 | `tiff/rgb.tif` | an RGB TIFF (three interleaved components) |
