@@ -3,11 +3,14 @@
 //! builds itself: the real corpus is isotropic on every axis, so an X/Y
 //! transposition in the reader could otherwise hide behind it.
 
+mod support;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use phasit_imread::tiff_reader::TiffReader;
 use phasit_imread::ImageReader;
+use support::scratch::Scratch;
 use tiff::encoder::colortype::Gray8;
 use tiff::encoder::{Rational, TiffEncoder};
 use tiff::tags::ResolutionUnit;
@@ -26,7 +29,11 @@ fn write_anisotropic_tiff(path: &Path) {
 
 #[test]
 fn an_anisotropic_tiff_publishes_each_axis_on_its_own_axis() {
-    let path = PathBuf::from(std::env::temp_dir().join("phasit_t1_anisotropic.tif"));
+    // The scratch file is removed with the guard, so a run leaves nothing
+    // behind in the temp folder.
+    let path = Scratch::new(
+        std::env::temp_dir().join(format!("phasit_t1_anisotropic_{}.tif", std::process::id())),
+    );
     write_anisotropic_tiff(&path);
 
     let reader = TiffReader::open(&path).expect("open the synthetic TIFF");

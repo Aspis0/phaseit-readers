@@ -5,15 +5,16 @@
 //! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README), and the tifffile
 //! `_ref` dumps. Skips cleanly (early return) when the variable is unset, or
 //! the sample or reference manifest is absent, so CI without the file stays
-//! green — but when they ARE present the `checked >= 8` assertion guarantees a
-//! silent skip cannot pass.
+//! green — unless the run sets `PHASIT_REAL_DATA_REQUIRED=1`, which turns
+//! every such skip into a failure. When they ARE present the `checked >= 8`
+//! assertion guarantees a silent skip cannot pass.
 
 mod real_data;
 
 use phasit_imread::lsm_reader::LsmReader;
 use phasit_imread::{DType, Dims5, Error, ImageReader};
 
-use real_data::real_file;
+use real_data::{real_file, reference_dump};
 
 const SAMPLE: &str = "lsm/stack.lsm";
 
@@ -77,8 +78,7 @@ fn lsm_planes_bit_exact_vs_tifffile_reference() {
     };
     let ref_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity/_ref");
     let manifest_path = ref_dir.join("manifest.json");
-    if !manifest_path.exists() {
-        eprintln!("skipping bit-exact parity: manifest absent");
+    if reference_dump(&manifest_path).is_none() {
         return;
     }
 
@@ -110,11 +110,12 @@ fn lsm_planes_bit_exact_vs_tifffile_reference() {
         // A manifest entry whose .npy is missing means a PARTIAL reference set: a
         // broken dev env, not a legitimate skip. Hard-fail so `checked >= 8` can
         // never be dodged by a half-present `_ref` dir. (The whole-manifest-absent
-        // case is handled by the early return above.)
+        // case is handled by the early return above.) The message names the dump
+        // by its path under `tests/parity/_ref`, never by the absolute path of
+        // the build machine.
         assert!(
             npy_path.exists(),
-            "partial LSM _ref: {} is missing (broken reference set)",
-            npy_path.display()
+            "partial LSM _ref: {npy_rel} is missing (broken reference set)"
         );
 
         let arr: ndarray::Array2<u16> =

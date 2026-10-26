@@ -4,14 +4,15 @@
 //! Uses a real RGB confocal TIFF, read from the folder named by
 //! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README). Skips cleanly
 //! (early return) when the variable is unset or the sample is absent, so CI
-//! without the file stays green.
+//! without the file stays green — unless the run sets
+//! `PHASIT_REAL_DATA_REQUIRED=1`, which turns every such skip into a failure.
 
 mod real_data;
 
 use phasit_imread::tiff_reader::TiffReader;
 use phasit_imread::{DType, Dims5, Error, ImageReader, PlaneBuf};
 
-use real_data::real_file;
+use real_data::{real_file, reference_dump};
 
 const SAMPLE: &str = "tiff/rgb.tif";
 
@@ -97,8 +98,7 @@ fn rgb_planes_bit_exact_vs_tifffile_reference() {
     };
     let ref_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity/_ref");
     let manifest_path = ref_dir.join("manifest.json");
-    if !manifest_path.exists() {
-        eprintln!("skipping bit-exact parity: manifest absent");
+    if reference_dump(&manifest_path).is_none() {
         return;
     }
 
@@ -127,8 +127,7 @@ fn rgb_planes_bit_exact_vs_tifffile_reference() {
         let shape = json_shape(&obj).expect("plane_shape field");
 
         let npy_path = ref_dir.join(&npy_rel);
-        if !npy_path.exists() {
-            eprintln!("skipping bit-exact parity: {} absent", npy_path.display());
+        if reference_dump(&npy_path).is_none() {
             return;
         }
 

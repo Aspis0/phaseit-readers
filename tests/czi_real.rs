@@ -4,7 +4,9 @@
 //! Uses real Zeiss confocal `.czi` files, read from the folder named by
 //! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README). Skips cleanly
 //! (early return) when the variable is unset or a sample is absent, so CI
-//! without the files stays green. When the files ARE present these checks gate:
+//! without the files stays green — unless the run sets
+//! `PHASIT_REAL_DATA_REQUIRED=1`, which turns every such skip into a failure.
+//! When the files ARE present these checks gate:
 //!   * dimensions (C/Z/T/Y/X in canonical TCZYX order),
 //!   * mosaic composition (`czi/mosaic.czi` composes 4 M-tiles per (C,Z) into
 //!     one bounding-box scene plane),
@@ -19,7 +21,7 @@ mod real_data;
 use phasit_imread::czi_reader::CziReader;
 use phasit_imread::{DType, Error, ImageReader, PlaneBuf};
 
-use real_data::real_file;
+use real_data::{bgr_sample, real_file};
 
 /// The mosaic sample: several tiles per (C,Z), composed into one scene.
 const SAMPLE_MOSAIC: &str = "czi/mosaic.czi";
@@ -125,20 +127,11 @@ fn czi_bgr24_color_geometry_and_plane() {
     // Real uncompressed Bgr24 sample (Zeiss/Bio-Formats `c_winnt.czi`, 275x174,
     // single subblock). Third-party — NOT committed; gated behind an env var so
     // the test skips cleanly when unset (mirrors the other real-file gates).
-    let path_buf = match std::env::var("PHASIT_CZI_BGR_SAMPLE") {
-        Ok(p) => std::path::PathBuf::from(p),
-        Err(_) => {
-            eprintln!("skipping: PHASIT_CZI_BGR_SAMPLE not set");
-            return;
-        }
-    };
-    let path = path_buf.as_path();
-    if !path.exists() {
-        eprintln!("skipping: Bgr24 sample {} not present", path.display());
+    let Some(path) = bgr_sample() else {
         return;
-    }
+    };
 
-    let reader = CziReader::open(path).expect("open Bgr24 CZI");
+    let reader = CziReader::open(&path).expect("open Bgr24 CZI");
     let meta = reader.meta();
     assert_eq!(meta.scene_count(), 1, "c_winnt.czi is a single scene");
 

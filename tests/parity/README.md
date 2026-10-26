@@ -31,7 +31,9 @@ against that constant's stem.
 
 Rename a file under `PHASIT_REAL_DATA_DIR` and the test that reads it finds nothing,
 prints `skipping:` and passes. Run the suite with `--nocapture` and grep for `skipping:`
-to tell a skip from a real run.
+to tell a skip from a real run. With `PHASIT_REAL_DATA_REQUIRED=1` (or `true`) the same
+missing file panics instead of skipping: the flag turns every skip into a failure, so a
+required run cannot pass without the dumps below.
 
 Dumps made from files whose stems differ from the test's constant are the other case:
 `lif_real` panics on a sample name the manifest does not know, `tiff_real` fails its

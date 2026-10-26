@@ -30,7 +30,9 @@ cc = "1"   # only used when the `jpegxr` feature is on (compiles vendored jxrlib
 default = []
 ndarray = ["dep:ndarray"]
 # jpegxr: CZI JpegXR-compressed subblocks. OPT-IN — requires a C toolchain to
-# build the vendored jxrlib (vendor/jxrlib/, BSD). A plain build stays pure-Rust.
+# build the vendored jxrlib (vendor/jxrlib/, BSD). This crate alone builds
+# pure-Rust by default; the workspace's apps (phasit-planed, src-tauri) enable
+# the feature, so building the workspace needs a C toolchain.
 jpegxr = []
 # CZI Zstd0/Zstd1 use the pure-Rust `ruzstd` (always on); no C `zstd` feature.
 

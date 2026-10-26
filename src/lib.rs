@@ -48,6 +48,14 @@ mod tiff_palette;
 mod tiff_plain;
 mod tiff_tags;
 
+// The real-file gate the tests share, INCLUDED rather than copied: the
+// library's own unit tests need the same skip-or-fail decision, and the
+// helper lives with the other test helpers. `cfg(test)` keeps it out of the
+// library, so no new public API ships.
+#[cfg(test)]
+#[path = "../tests/real_data/mod.rs"]
+mod real_data;
+
 /// CZI JPEG-XR (compression id 4) decode via vendored jxrlib. Opt-in: only
 /// compiled with the `jpegxr` feature (needs a C toolchain to build jxrlib).
 #[cfg(feature = "jpegxr")]

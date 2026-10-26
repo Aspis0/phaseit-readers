@@ -5,10 +5,11 @@
 //! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README), and the
 //! `liffile` `_ref` dumps (`tests/parity/_ref/manifest_lif.json` + `*.npy`).
 //! Skips cleanly (early return) when the variable is unset, or the samples or
-//! the manifest are absent, so CI without the files stays green — but when they
-//! ARE present the `checked >= 48` assertion guarantees a silent skip cannot
-//! pass. The harness dumps planes from EVERY image in both files (not just
-//! image[0]), so this covers both the C=3 (`Series001`) and
+//! the manifest are absent, so CI without the files stays green — unless the
+//! run sets `PHASIT_REAL_DATA_REQUIRED=1`, which turns every such skip into a
+//! failure. When they ARE present the `checked >= 48` assertion guarantees a
+//! silent skip cannot pass. The harness dumps planes from EVERY image in both
+//! files (not just image[0]), so this covers both the C=3 (`Series001`) and
 //! C=2 (`Series003/004/005`) channel layouts.
 //!
 //! The `Series001_pmd_0` manifest entry is deliberately NOT decoded: its pixels
@@ -20,7 +21,7 @@ mod real_data;
 use phasit_imread::lif_reader::LifReader;
 use phasit_imread::{DType, Dims5, Error, ImageReader};
 
-use real_data::real_file;
+use real_data::{real_file, reference_dump};
 
 // Only referenced by the bit-exact parity test (ndarray-gated).
 #[cfg(feature = "ndarray")]
@@ -96,8 +97,7 @@ fn lif_planes_bit_exact_vs_liffile_reference() {
     let Some(multi) = real_file(SAMPLE_MULTI) else {
         return;
     };
-    if !manifest_path.exists() {
-        eprintln!("skipping bit-exact parity: manifest_lif.json absent");
+    if reference_dump(&manifest_path).is_none() {
         return;
     }
 
@@ -139,11 +139,12 @@ fn lif_planes_bit_exact_vs_liffile_reference() {
         let npy_path = ref_dir.join(&npy_rel);
         // A manifest entry whose .npy is missing means a PARTIAL reference set: a
         // broken dev env, not a legitimate skip. Hard-fail so `checked >= 11`
-        // cannot be dodged by a half-present `_ref` dir.
+        // cannot be dodged by a half-present `_ref` dir. The message names the
+        // dump by its path under `tests/parity/_ref`, never by the absolute
+        // path of the build machine.
         assert!(
             npy_path.exists(),
-            "partial LIF _ref: {} is missing (broken reference set)",
-            npy_path.display()
+            "partial LIF _ref: {npy_rel} is missing (broken reference set)"
         );
 
         let arr: ndarray::Array2<u8> =

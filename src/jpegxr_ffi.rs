@@ -506,11 +506,14 @@ mod tests {
         // this folder by hand. When present, this proves the FFI decodes real
         // Zeiss codestreams byte-exact (varied real tile sizes, not just imagecodecs
         // synthetic streams), and skips cleanly otherwise so plain checkouts pass.
+        // The gate is the shared one: absent and not required is a printed skip,
+        // absent and required is a failure — the check can never go dark.
         let real =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jpegxr_real");
-        if real.join("manifest_real.json").is_file() {
-            let n = verify_fixture_dir(&real, "manifest_real.json");
-            eprintln!("verified {n} real Axioscan JPEG-XR tiles against imagecodecs");
+        if crate::real_data::reference_dump(&real.join("manifest_real.json")).is_none() {
+            return;
         }
+        let n = verify_fixture_dir(&real, "manifest_real.json");
+        eprintln!("verified {n} real Axioscan JPEG-XR tiles against imagecodecs");
     }
 }

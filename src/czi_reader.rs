@@ -2664,20 +2664,14 @@ mod tests {
     // window, and an edge window. The file is read from the folder named by
     // `PHASIT_REAL_DATA_DIR` (the layout is in the crate README); gated on
     // the file's presence (mirrors `tests/czi_real.rs`) and skips cleanly when
-    // it is absent.
+    // it is absent — unless the run sets `PHASIT_REAL_DATA_REQUIRED=1`, which
+    // turns that skip into a failure.
     #[test]
     fn region_matches_crop_real_mosaic_czi() {
         const SAMPLE: &str = "czi/mosaic.czi";
-        const REAL_DATA_DIR_VAR: &str = "PHASIT_REAL_DATA_DIR";
-        let Some(dir) = std::env::var_os(REAL_DATA_DIR_VAR) else {
-            eprintln!("skipping: {REAL_DATA_DIR_VAR} is not set");
+        let Some(path) = crate::real_data::real_file(SAMPLE) else {
             return;
         };
-        let path = std::path::PathBuf::from(dir).join(SAMPLE);
-        if !path.exists() {
-            eprintln!("skipping: {SAMPLE} is not present under {REAL_DATA_DIR_VAR}");
-            return;
-        }
         let reader = CziReader::open(&path).expect("open real mosaic CZI");
         let dims = reader.meta().scene(0).unwrap().dims;
         let z_mid = dims.z / 2;

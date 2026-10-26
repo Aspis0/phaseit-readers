@@ -5,8 +5,10 @@
 //! named by `PHASIT_REAL_DATA_DIR` (the layout is in the crate README) and
 //! skips cleanly (early return) when the variable is unset, when the file is
 //! absent, or when the pre-generated reference dumps are absent, so CI without
-//! them stays green. When both ARE present these checks gate the reader against
-//! ground truth produced by the `nd2` Python reference:
+//! them stays green — unless the run sets `PHASIT_REAL_DATA_REQUIRED=1`, which
+//! turns every such skip into a failure. When both ARE present these checks
+//! gate the reader against ground truth produced by the `nd2` Python
+//! reference:
 //!   * scene count and dims (T/C/Z/Y/X),
 //!   * every reference plane decodes byte-identically (native LE bytes),
 //!   * the first-8 samples match the manifest,
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 use phasit_imread::nd2_reader::Nd2Reader;
 use phasit_imread::{DType, Error, ImageReader, PlaneBuf};
 
-use real_data::real_file;
+use real_data::{real_file, reference_dump};
 
 const SAMPLE: &str = "nd2/stack.nd2";
 
@@ -43,8 +45,7 @@ fn nd2_real_parity() {
         return;
     };
     let manifest_path = fixtures_dir().join("manifest_real.json");
-    if !manifest_path.exists() {
-        eprintln!("skipping: manifest {} not present", manifest_path.display());
+    if reference_dump(&manifest_path).is_none() {
         return;
     }
 

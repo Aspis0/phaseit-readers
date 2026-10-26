@@ -102,7 +102,21 @@ relative path inside that folder. A test whose variable is unset, or whose
 file is absent, skips with a message saying which of the two it was, so the
 suite stays green without the files. A skipped test still counts as passed in
 the cargo summary, so read the `skipping:` messages (run the suite with
-`--nocapture`) to tell a skip from a real run. The folder is expected to hold:
+`--nocapture`) to tell a skip from a real run. Set
+`PHASIT_REAL_DATA_REQUIRED=1` (or `true`) and every one of those skips becomes
+a failure that names what is missing, so a run that needs the real data cannot
+pass quietly without it. The flag takes two values only: unset, empty or `0`
+means the run does not need the data, `1` or `true` means it does; any other
+value is a typo and panics rather than failing open. The flag covers the whole
+run: the reference dumps, the third-party sample below and the real JPEG-XR
+tiles are gated by it as well. A required run therefore needs the generated
+artifacts too, and none of them is in the repository: `tests/parity/dump_ref.py`
+makes the `_ref/` dumps of the TIFF and LSM samples,
+`tests/parity/dump_ref_lif.py` the LIF ones, and `tests/parity/dump_ref_nd2.py`
+the planes of `tests/fixtures/nd2_real/` (see `tests/parity/README.md`). The
+`tests/fixtures/jpegxr_real/` folder has no producer in this repository, so a
+required run stops at the JPEG-XR real-tile check unless that folder is
+supplied by hand. The folder is expected to hold:
 
 | Relative path | What it is |
 |---|---|
