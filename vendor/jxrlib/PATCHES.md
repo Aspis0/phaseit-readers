@@ -8,7 +8,7 @@ Microsoft's JPEG-XR library, BSD-licensed — see the upstream headers).
     commit:    19cc1fa19ca6607449d210aea946b3187f808f2c  (master)
 
 Rule: every file of this tree that has an upstream counterpart is upstream's
-byte for byte at that commit, with the single exception listed below. The
+byte for byte at that commit, with the two exceptions listed below. The
 upstream files were fetched from raw.githubusercontent.com at that commit and
 compared file by file with sha256sum; "Byte accounting" at the end gives the
 result.
@@ -50,6 +50,42 @@ Patches
   upstream's bytes exactly, line endings (CRLF) included. It is marked
   inline with a `/* phasit: ... */` comment, so it is greppable (`rg "phasit:"`).
 
+### 2. Declare `_byteswap_ulong` where it is defined, so clang can build the tree
+
+- **File:** `image/sys/strcodec.h`, lines 41-56 of the vendored file — the header
+  that both `image/sys/strcodec.c` (which defines the function) and
+  `image/decode/segdec.c` (which calls it) include.
+- **Upstream bug:** no header declares `_byteswap_ulong`, so `segdec.c` calls it
+  without a prototype in scope. The macOS CI job (clang) does not compile:
+  ```
+  vendor/jxrlib/image/decode/segdec.c:66:12: error: call to undeclared function '_byteswap_ulong'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  ```
+  GCC only warns about it, and MSVC never notices, because the CRT declares
+  `_byteswap_ulong` for it.
+- **Fix:** declare the function in `strcodec.h` under exactly the condition of its
+  definition in `strcodec.c` (lines 667-684):
+  ```c
+  #if (defined(WIN32) && !defined(UNDER_CE)) || (defined(UNDER_CE) && defined(_ARM_))
+  // WinCE ARM and Desktop x86
+  #else
+  // other platform
+  #ifndef _BIG__ENDIAN_
+  U32 _byteswap_ulong(U32 bits);
+  #endif // _BIG__ENDIAN_
+  #endif
+  ```
+  The definition exists only when neither `(WIN32 && !UNDER_CE)` nor
+  `(UNDER_CE && _ARM_)` holds, and only when `_BIG__ENDIAN_` is not set: on
+  big-endian `strcodec.c` defines a macro instead (`#define _byteswap_ulong(x) (x)`),
+  which a declaration would break, and on Win32 the CRT provides the function, so
+  declaring it there would clash with the MSVC intrinsic (C2169).
+- **How the delta stays checkable:** the patch is the only difference between the
+  vendored `image/sys/strcodec.h` and upstream's file; deleting the 16 added lines
+  reproduces upstream's bytes exactly, line endings (LF) included.
+- **If upstream fixes it:** drop those 16 lines and the vendored file is upstream's
+  bytes again; the byte accounting below goes back to 47 identical files and 1
+  patched file.
+
 Vendoring additions (no upstream counterpart)
 ---------------------------------------------
 
@@ -74,9 +110,10 @@ Byte accounting
 
 50 files in this tree:
 
-- 47 are byte-identical to upstream at 19cc1fa (sha256 compared file by file against
+- 46 are byte-identical to upstream at 19cc1fa (sha256 compared file by file against
   the files fetched from raw.githubusercontent.com at that commit);
-- 1 (`jxrgluelib/JXRGlueJxr.c`) differs from upstream only by the patch above;
+- 2 (`jxrgluelib/JXRGlueJxr.c`, `image/sys/strcodec.h`) differ from upstream only by
+  the patches above;
 - 2 (`LICENSE`, `PATCHES.md`) are the vendoring's own files and have no upstream
   counterpart.
 
