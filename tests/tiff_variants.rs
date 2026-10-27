@@ -82,11 +82,55 @@ fn every_fixture_reads_exactly_as_its_manifest_says() {
     for entry in fixtures {
         let file = entry["file"].as_str().expect("file");
         let path = fixture_dir().join(file);
+        let refusals: &[Value] = match entry["refused"].as_array() {
+            Some(list) => list,
+            None => &[],
+        };
+
+        // A fixture that states no readable scene must be refused whole, and
+        // the refusal must name the scene and the reason the manifest states.
+        if entry["scenes"].as_u64().expect("scenes") == 0 {
+            let error = match TiffReader::open(&path) {
+                Ok(_) => panic!("{file}: the fixture must be refused"),
+                Err(error) => error,
+            };
+            let message = error.to_string();
+            for refusal in refusals {
+                let name = refusal["name"].as_str().expect("name");
+                let reason = refusal["reason"].as_str().expect("reason");
+                assert!(message.contains(name), "{file}: the refusal names the scene");
+                assert!(message.contains(reason), "{file}: the refusal names the reason");
+            }
+            continue;
+        }
+
         let reader = TiffReader::open(&path).expect("open the fixture");
         let meta = reader.meta();
 
         let scenes = entry["scenes"].as_u64().expect("scenes") as usize;
         assert_eq!(meta.scene_count(), scenes, "{file}: scene count");
+
+        // The scenes the manifest says are refused must be refused by name,
+        // and the readable ones must keep their own index.
+        assert_eq!(
+            reader.refused_scenes().len(),
+            refusals.len(),
+            "{file}: refused scene count"
+        );
+        for refusal in refusals {
+            let index = refusal["image_index"].as_u64().expect("image_index") as usize;
+            let refused = reader
+                .refused_scenes()
+                .iter()
+                .find(|scene| scene.image_index == index)
+                .unwrap_or_else(|| panic!("{file}: the scene {index} must be refused"));
+            assert_eq!(refused.name, refusal["name"].as_str().expect("name"));
+            assert!(
+                refused.reason.contains(refusal["reason"].as_str().expect("reason")),
+                "{file}: the refusal names the reason: {}",
+                refused.reason
+            );
+        }
 
         // The per-scene facts: a single-scene fixture states them once, a
         // multi-scene fixture states them per scene.

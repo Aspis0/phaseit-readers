@@ -198,6 +198,48 @@
      "hex": "00010102"
     }
    ]
+  },
+  {
+   "file": "refused-ome.tif",
+   "what": "an OME-TIFF whose only scene states a pixel type the reader does not model: the whole file is refused",
+   "scenes": 0,
+   "refused": [
+    {
+     "image_index": 0,
+     "name": "unreadable scene",
+     "reason": "OME PixelType \"complex\" not modelled by phasit-imread"
+    }
+   ]
+  },
+  {
+   "file": "partly-refused-ome.tif",
+   "what": "an OME-TIFF of two scenes: the first reads, the second states a pixel type the reader does not model and is refused",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 1,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "U8",
+   "samples": 1,
+   "planes": [
+    {
+     "scene": 0,
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "000102030102030402030405"
+    }
+   ],
+   "refused": [
+    {
+     "image_index": 1,
+     "name": "unreadable scene",
+     "reason": "OME PixelType \"complex\" not modelled by phasit-imread"
+    }
+   ]
   }
  ]
 }

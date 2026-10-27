@@ -305,6 +305,102 @@ def two_series_ome():
     }
 
 
+def refused_ome():
+    """An OME-TIFF whose only scene states a pixel type the reader cannot model.
+
+    The file is refused whole: the reader names the reason and reads no scene.
+    """
+    width, height = 4, 3
+    data = bytes((x + y) % 256 for y in range(height) for x in range(width))
+    description = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">\n'
+        '  <Image ID="Image:0" Name="unreadable scene">\n'
+        '    <Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="complex"'
+        ' SizeX="4" SizeY="3" SizeZ="1" SizeC="1" SizeT="1">\n'
+        '      <TiffData IFD="0" PlaneCount="1"/>\n'
+        '    </Pixels>\n'
+        '  </Image>\n'
+        '</OME>\n'
+    )
+    pages = [
+        {"width": width, "height": height, "data": data, "tags": {
+            258: (SHORT, [8]),
+            259: (SHORT, [1]),
+            262: (SHORT, [1]),
+            270: (ASCII, description),
+            339: (SHORT, [1]),
+        }},
+    ]
+    return write_tiff(os.path.join(HERE, "refused-ome.tif"), pages), {
+        "file": "refused-ome.tif",
+        "what": "an OME-TIFF whose only scene states a pixel type the reader does not model: the whole file is refused",
+        "scenes": 0,
+        "refused": [{
+            "image_index": 0,
+            "name": "unreadable scene",
+            "reason": "OME PixelType \"complex\" not modelled by phasit-imread",
+        }],
+    }
+
+
+def partly_refused_ome():
+    """An OME-TIFF of two scenes: the first reads, the second is refused.
+
+    The refusal holds its place in the file: the readable scene keeps its own
+    index and the refused one is named with its reason.
+    """
+    width, height = 4, 3
+    first = bytes((x + y) % 256 for y in range(height) for x in range(width))
+    second = bytes((x * 2 + y) % 256 for y in range(height) for x in range(width))
+    description = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">\n'
+        '  <Image ID="Image:0" Name="readable scene">\n'
+        '    <Pixels ID="Pixels:0" DimensionOrder="XYCZT" Type="uint8"'
+        ' SizeX="4" SizeY="3" SizeZ="1" SizeC="1" SizeT="1">\n'
+        '      <TiffData IFD="0" PlaneCount="1"/>\n'
+        '    </Pixels>\n'
+        '  </Image>\n'
+        '  <Image ID="Image:1" Name="unreadable scene">\n'
+        '    <Pixels ID="Pixels:1" DimensionOrder="XYCZT" Type="complex"'
+        ' SizeX="4" SizeY="3" SizeZ="1" SizeC="1" SizeT="1">\n'
+        '      <TiffData IFD="1" PlaneCount="1"/>\n'
+        '    </Pixels>\n'
+        '  </Image>\n'
+        '</OME>\n'
+    )
+    pages = [
+        {"width": width, "height": height, "data": first, "tags": {
+            258: (SHORT, [8]),
+            259: (SHORT, [1]),
+            262: (SHORT, [1]),
+            270: (ASCII, description),
+            339: (SHORT, [1]),
+        }},
+        {"width": width, "height": height, "data": second, "tags": {
+            258: (SHORT, [8]),
+            259: (SHORT, [1]),
+            262: (SHORT, [1]),
+            339: (SHORT, [1]),
+        }},
+    ]
+    return write_tiff(os.path.join(HERE, "partly-refused-ome.tif"), pages), {
+        "file": "partly-refused-ome.tif",
+        "what": "an OME-TIFF of two scenes: the first reads, the second states a pixel type the reader does not model and is refused",
+        "scenes": 1,
+        "dims": {"t": 1, "c": 1, "z": 1, "y": 3, "x": 4},
+        "dtype": "U8",
+        "samples": 1,
+        "planes": [{"scene": 0, "t": 0, "c": 0, "z": 0, "hex": first.hex()}],
+        "refused": [{
+            "image_index": 1,
+            "name": "unreadable scene",
+            "reason": "OME PixelType \"complex\" not modelled by phasit-imread",
+        }],
+    }
+
+
 def signed_and_float():
     """A signed 16-bit page and a float page: the other two SampleFormats."""
     width, height = 4, 3
@@ -349,6 +445,10 @@ def main():
     entries.append(float_entry)
     _ome_path, ome_entry = two_series_ome()
     entries.append(ome_entry)
+    _refused_path, refused_entry = refused_ome()
+    entries.append(refused_entry)
+    _partly_path, partly_entry = partly_refused_ome()
+    entries.append(partly_entry)
 
     manifest = {
         "generator": "gen_tiff_fixtures.py",

@@ -50,6 +50,66 @@
 //! blitted at `(X.Start - origin_x, Y.Start - origin_y)`. A non-mosaic scene is
 //! the degenerate one-tile case of the same code path.
 //!
+//! A plane is drawn in **ascending mosaic index**, so the tile with the higher
+//! `M` ends up on top — but only when the plane is sorted at all: it is
+//! sorted only when at least one of its own tiles carries a non-negative `M`,
+//! and a plane whose `M` values are all negative keeps its subblock-directory
+//! order instead.
+//!
+//! The ascending-mosaic-index order is the order `czifile` composes a mosaic
+//! in (`czifile.py:1258-1259`: *"Entries with a mosaic index are sorted by
+//! mosaic index so that tiles with higher M-index are composited on top"*;
+//! the sort at `czifile.py:1308-1309`, applied at `czifile.py:2810-2811`).
+//! libCZI is **not verified** — no libCZI source is available on this machine,
+//! so the only claim made here is the one about `czifile`.
+//!
+//! The rule, precisely:
+//!
+//! * A subblock that carries **no** `M` dimension has mosaic index `-1`
+//!   (`czifile.py:4598`), and a subblock that carries **several** `M`
+//!   dimension entries takes the **first** one in file order (`czifile.py:4609`
+//!   walks the dimension entries in reverse, so the first `M` in the file is
+//!   the last one assigned).
+//! * A plane is sorted by mosaic index only when **at least one of its own
+//!   tiles carries a non-negative `M`** (`czifile.py:1308`); otherwise the
+//!   plane keeps its subblock-directory order. A file whose `M` values are all
+//!   negative is therefore composed in directory order.
+//! * The sort is **stable**: tiles that share a mosaic index keep their
+//!   subblock-directory order.
+//! * A **sorted** plane draws its tiles in ascending mosaic index, and a tile
+//!   that carries **no** `M` has index `-1`: it is drawn after every tile with
+//!   a **negative** `M` and before every tile with a non-negative one. So the
+//!   tile without an `M` is not necessarily below the tiles that carry one —
+//!   it is below the ones with a non-negative `M` and above the ones with a
+//!   negative `M`. In the sub-case where every `M` of the plane is **negative**
+//!   the plane is not sorted at all, so no tile is drawn first: the directory
+//!   order stands, and a tile without an `M` (index `-1`) is not necessarily
+//!   below the others either.
+//! * A **packed** `M` (`M.Size > 1`) is accepted, not refused: the `Start` is
+//!   the mosaic index and the `Size` is ignored, like `czifile` does
+//!   (`czifile.py:4616-4617` — no size check at all). The `M` axis carries no
+//!   pixels, so a packed `M` cannot change the geometry of the composed
+//!   plane. The one gap is the JPEG-XR path: a JPEG-XR subblock that really
+//!   holds several packed frames would be decoded as one frame, because that
+//!   path has no frame-count check (the uncompressed and zstd paths refuse a
+//!   mismatched length). No such sample exists, so this is declared, not
+//!   tested.
+//!
+//! `czifile` evaluates "is any `M` non-negative" over the WHOLE file's
+//! filtered subblock directory (`czifile.py:1308`), while this reader
+//! evaluates it per plane. The two agree for every file whose planes are
+//! either all-mosaic or all-non-mosaic; they differ only for a file where one
+//! plane carries a non-negative `M` and another plane's `M` values are all
+//! negative *and distinct* — there `czifile` sorts that second plane by its
+//! negative indices, and this reader keeps its directory order.
+//!
+//! `czifile`'s threaded path is **non-deterministic** for overlapping tiles:
+//! *"the final value of any pixel covered by more than one tile is
+//! non-deterministic under multi-threading"* (`czifile.py:2793-2799`); only
+//! `maxworkers=1` forces *"sequential, fully deterministic compositing"*
+//! (`czifile.py:2800-2801`, the path at `czifile.py:2810-2811`). Every
+//! reference in this repository is therefore taken with `maxworkers=1`.
+//!
 //! The file's list of scenes is the sorted distinct `S` values of the
 //! **full-resolution** subblocks. A scene that holds only sub-sampled
 //! (pyramid) tiles is therefore not a scene of the file this reader composes:
@@ -69,8 +129,9 @@
 //! * `1` JpgFile / `2` LZW — `Error::Unsupported`.
 //! * `4` JpegXR — `Error::Unsupported` unless the `jpegxr` feature is on.
 //!
-//! The Zstd1 header/Hi-Lo handling is implemented to the documented libCZI/
-//! czifile layout and is **validated against imagecodecs `zstd1` fixtures** (the
+//! The Zstd1 header/Hi-Lo handling is implemented to the documented czifile
+//! layout (libCZI not verified) and is **validated against imagecodecs `zstd1`
+//! fixtures** (the
 //! same codec czifile uses to decode real Zeiss zstd subblocks — see
 //! `tests/fixtures/zstd/` and the `zstd_fixtures_match_ground_truth` test); see
 //! `zstd1_decode` for the exact bytes.
@@ -138,6 +199,9 @@ struct SubBlock {
     dtype: DType,
     /// Samples per pixel (1 = grayscale, 3 = RGB/color).
     samples: u32,
+    /// Mosaic index: the `M` dimension's `Start`. `-1` when the tile carries no
+    /// `M` dimension (czifile's own convention, `czifile.py:4598`).
+    m: i32,
     /// Tile X position within the scene pixel grid (`X.Start`, may be negative).
     start_x: i32,
     /// Tile Y position within the scene pixel grid (`Y.Start`, may be negative).
@@ -264,6 +328,7 @@ impl ImageReader for CziReader {
                 compression: de.compression,
                 dtype,
                 samples,
+                m: de.m,
                 start_x: de.start_x,
                 start_y: de.start_y,
                 stored_x: de.stored_x,
@@ -413,6 +478,42 @@ impl ImageReader for CziReader {
             let mut tiles: HashMap<(i32, i32, i32), Vec<usize>> = HashMap::new();
             for co in members {
                 tiles.entry((co.c, co.z, co.t)).or_default().push(co.subblock);
+            }
+
+            // Draw the tiles of a plane in ASCENDING MOSAIC INDEX, so the tile
+            // with the higher M ends up on top. This is the order `czifile`
+            // composes a mosaic in ("Entries with a mosaic index are sorted by
+            // mosaic index so that tiles with higher M-index are composited on
+            // top", `czifile.py:1258-1259`; the sort at `czifile.py:1308-1309`,
+            // applied at `czifile.py:2810-2811`). libCZI is NOT verified here:
+            // no libCZI source is available on this machine, so the claim this
+            // reader makes is about `czifile` only.
+            //
+            // WHY: the subblock directory is NOT in mosaic order — in the
+            // Axioscan sample 993 of the 7350 overlapping pairs pick a
+            // different winner under the two orders, so the directory order
+            // would draw a different tile on top wherever two tiles overlap.
+            //
+            // The sort is done ONCE, here, where the per-plane tile lists are
+            // built — not per `region()` call. It is stable, so tiles that
+            // share a mosaic index keep their subblock-directory order, and
+            // the tiles that carry no M dimension at all (index -1) keep
+            // theirs too: they are drawn after the tiles with a negative M and
+            // before the ones with a non-negative M.
+            //
+            // A plane is sorted only when at least one of THAT plane's tiles
+            // carries a non-negative M. `czifile` evaluates that condition over
+            // the WHOLE file's filtered subblock directory
+            // (`czifile.py:1308`); this reader evaluates it per PLANE, which
+            // is a documented divergence (see the module doc). A plane whose
+            // tiles all carry a negative M keeps its subblock-directory
+            // order, which is what `czifile` does for a file that carries no
+            // mosaic at all.
+            for plane_tiles in tiles.values_mut() {
+                if !plane_tiles.iter().any(|&sb_idx| subblocks[sb_idx].m >= 0) {
+                    continue;
+                }
+                plane_tiles.sort_by_key(|&sb_idx| subblocks[sb_idx].m);
             }
 
             // Channel metadata: names from the XML in document order, best-effort.
@@ -998,7 +1099,8 @@ fn zstd_raw_decode(input: &[u8], expected: usize) -> Result<Vec<u8>> {
 ///
 /// Validated against imagecodecs `zstd1_encode` output (byte-identical to what
 /// real Zeiss ZSTDHDR subblocks store — see `zstd_fixtures_match_ground_truth`).
-/// The header layout observed in every fixture, matching libCZI/czifile:
+/// The header layout observed in every fixture, matching czifile (libCZI not
+/// verified):
 ///
 /// ```text
 /// byte 0            : header size in bytes (1 with no Hi/Lo, 3 with Hi/Lo)
@@ -1081,6 +1183,8 @@ struct RawDirEntry {
     c: i32,
     z: i32,
     t: i32,
+    /// Mosaic index (`M.Start`); `-1` when the dimension is absent.
+    m: i32,
 }
 
 /// Parse the `FileHeaderSegment`, returning `(DirectoryPosition, MetadataPosition)`.
@@ -1196,6 +1300,12 @@ fn parse_dir_entry(buf: &[u8], off: usize) -> Result<(RawDirEntry, usize)> {
     let mut stored_x: Option<usize> = None;
     let mut stored_y: Option<usize> = None;
     let (mut s, mut c, mut z, mut t) = (0i32, 0i32, 0i32, 0i32);
+    // The mosaic index: `-1` when the entry carries no `M` dimension, the same
+    // sentinel `czifile` uses (`czifile.py:4598`).
+    let mut m = -1i32;
+    // Whether an `M` dimension entry has been seen yet: when a subblock carries
+    // SEVERAL `M` dimension entries, the FIRST one in file order wins.
+    let mut m_seen = false;
 
     for i in 0..dim_count {
         let d = off + DIR_ENTRY_FIXED + i * DIM_ENTRY_LEN;
@@ -1241,7 +1351,25 @@ fn parse_dir_entry(buf: &[u8], off: usize) -> Result<(RawDirEntry, usize)> {
                 reject_packed_axis(b'T', size)?;
                 t = start;
             }
-            b'M' => { /* mosaic tile index: placement comes from X/Y.Start */ }
+            // The mosaic index: ONE value per subblock, like `czifile`.
+            //
+            // A PACKED `M` (`Size > 1`) is ACCEPTED, not refused: `czifile`
+            // takes the `Start` and ignores the `Size` (`czifile.py:4616-4617`
+            // — no size check at all), and the `M` axis contributes NO pixels
+            // to the plane geometry this reader models, so a packed `M` cannot
+            // make the composed plane wrong. Refusing it would fail a whole
+            // FILE over an axis that changes nothing but the draw order.
+            //
+            // A subblock that carries SEVERAL `M` dimension entries takes the
+            // FIRST one in file order: `czifile` walks the dimension entries in
+            // reverse (`czifile.py:4609`), so the first `M` in the file is the
+            // last one assigned (`czifile.py:4617`).
+            b'M' => {
+                if !m_seen {
+                    m = start;
+                    m_seen = true;
+                }
+            }
             // Any other dimension (B, V, H, R, I, …) is not modelled. It is
             // harmless only at index 0; a non-zero start would mean unmodelled
             // data, so fail closed rather than silently fold planes together.
@@ -1279,6 +1407,7 @@ fn parse_dir_entry(buf: &[u8], off: usize) -> Result<(RawDirEntry, usize)> {
         c,
         z,
         t,
+        m,
     };
     Ok((entry, DIR_ENTRY_FIXED + dim_count * DIM_ENTRY_LEN))
 }
@@ -2554,6 +2683,243 @@ mod tests {
         assert_eq!(scene.dtype, DType::U8);
         assert_eq!(scene.samples, 3);
         assert_region_eq_crop(&reader, &mosaic_rects_4x4());
+    }
+
+    /// Two OVERLAPPING 2x2 tiles whose SUBBLOCK-DIRECTORY order is the
+    /// REVERSE of their mosaic-index order: the tile with the higher M is
+    /// written first. The reader must composite in ascending mosaic index —
+    /// the order `czifile` uses (`czifile.py:1258-1259`, `:1308-1309`, applied
+    /// at `:2810-2811`); libCZI is not verified — so the higher-M tile is
+    /// drawn ON TOP of the overlap, not under it.
+    ///
+    /// ```text
+    ///   tile M=1 (dir 0)   tile M=0 (dir 1)
+    ///   xs=0               xs=1
+    ///   10 11 | 20 21      x=0  x=1  x=2
+    ///   12 13 | 22 23
+    /// ```
+    ///
+    /// The overlap is the middle column (x=1). Ascending M draws the M=1 tile
+    /// last, so x=1 is 11/13; the subblock-directory order would draw the M=0
+    /// tile last and make x=1 20/22.
+    #[test]
+    fn overlapping_tiles_composite_in_mosaic_index_order() {
+        let reader = open_synth(&build_czi(&[
+            // M=1 first in the directory, M=0 second: the directory order is
+            // the REVERSE of the mosaic-index order.
+            TileSpec {
+                pixel_type: 0,
+                xs: 0,
+                xsz: 2,
+                ys: 0,
+                ysz: 2,
+                c: 0,
+                z: 0,
+                m: 1,
+                pixels: vec![10, 11, 12, 13],
+            },
+            TileSpec {
+                pixel_type: 0,
+                xs: 1,
+                xsz: 2,
+                ys: 0,
+                ysz: 2,
+                c: 0,
+                z: 0,
+                m: 0,
+                pixels: vec![20, 21, 22, 23],
+            },
+        ]));
+
+        let scene = reader.meta().scene(0).unwrap();
+        assert_eq!(scene.dims, Dims5 { t: 1, c: 1, z: 1, y: 2, x: 3 });
+
+        // The whole plane: the overlap column (x=1) belongs to the tile with
+        // the higher mosaic index.
+        let p = reader.plane(0, 0, 0, 0).expect("compose full plane");
+        assert_eq!(p.shape, [2, 3]);
+        match p.data {
+            PlaneBuf::U8(v) => assert_eq!(
+                v,
+                vec![10, 11, 21, 12, 13, 23],
+                "the tile with the higher mosaic index must be drawn on top"
+            ),
+            other => panic!("expected U8, got {:?}", other.dtype()),
+        }
+
+        // The out-of-core path composes in the same order.
+        let overlap = reader
+            .region(0, 0, 0, 0, PixelRect::new(1, 0, 1, 2))
+            .expect("read the overlap column");
+        assert_eq!(overlap.shape, [2, 1]);
+        match overlap.data {
+            PlaneBuf::U8(v) => assert_eq!(v, vec![11, 13]),
+            other => panic!("expected U8, got {:?}", other.dtype()),
+        }
+    }
+
+    // --- the mosaic-axis rules, one test each ---------------------------------
+    //
+    // Every test below composes 2x2 Gray8 tiles that OVERLAP and only the
+    // mosaic axis differs, so the bytes say which tile was drawn on top. The
+    // two-tile tests use these tiles:
+    //
+    //   tile A: X 0..2, Y 0..2, pixels [10, 11, 12, 13]
+    //   tile B: X 1..3, Y 0..2, pixels [20, 21, 22, 23]
+    //
+    // They share the scene column x=1. A drawn last puts A's column 1 (11, 13)
+    // there; B drawn last puts B's column 0 (20, 22) there. The tests that
+    // compose three tiles say which columns those three share.
+
+    /// A 2x2 Gray8 tile at `X.Start = xs`, carrying the given mosaic-axis dims.
+    fn mosaic_tile(xs: i32, m_dims: &[(u8, i32, i32)], pixels: Vec<u8>) -> RawTile {
+        let mut dims = vec![(b'X', xs, 2), (b'Y', 0, 2)];
+        dims.extend_from_slice(m_dims);
+        RawTile {
+            pixel_type: 0,
+            dims,
+            pixels,
+            bad_file_pos: None,
+        }
+    }
+
+    /// The composed plane of a mosaic, `wide` pixels wide and two rows tall.
+    fn mosaic_plane(reader: &CziReader, wide: usize) -> Vec<u8> {
+        let p = reader.plane(0, 0, 0, 0).expect("compose full plane");
+        assert_eq!(p.shape, [2, wide]);
+        match p.data {
+            PlaneBuf::U8(v) => v,
+            other => panic!("expected U8, got {:?}", other.dtype()),
+        }
+    }
+
+    /// An ABSENT mosaic dimension is index -1 (czifile.py:4598), so in a
+    /// SORTED plane a tile without one is drawn BELOW the tiles that carry a
+    /// non-negative `M` — even when it comes first in the subblock directory.
+    #[test]
+    fn absent_mosaic_axis_draws_below_the_mosaic_tiles() {
+        // A carries M=0 and comes FIRST in the directory; B carries no M at
+        // all. Ascending mosaic index draws B (-1) first and A (0) last.
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[(b'M', 0, 1)], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[], vec![20, 21, 22, 23]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 3),
+            vec![10, 11, 21, 12, 13, 23],
+            "the tile without a mosaic dimension is drawn first, so the M=0 tile is on top"
+        );
+    }
+
+    /// A plane whose tiles ALL carry a negative mosaic index keeps the
+    /// subblock-directory order: the sort only runs when some entry of the
+    /// plane carries a non-negative index (czifile.py:1308).
+    #[test]
+    fn plane_with_only_negative_mosaic_indices_keeps_directory_order() {
+        // A carries M=-3 and comes first, B carries M=-5 and comes second.
+        // Sorting them by mosaic index would swap them: -5 before -3.
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[(b'M', -3, 1)], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[(b'M', -5, 1)], vec![20, 21, 22, 23]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 3),
+            vec![10, 20, 21, 12, 22, 23],
+            "a plane with no non-negative mosaic index keeps its directory order"
+        );
+    }
+
+    /// A MIXED plane whose `M` values are all negative is NOT sorted at all:
+    /// no tile of it carries a non-negative index, so the plane keeps its
+    /// subblock-directory order and a tile without an `M` is not necessarily
+    /// drawn below the tiles that carry one.
+    #[test]
+    fn mixed_plane_with_only_negative_mosaic_indices_keeps_directory_order() {
+        // A carries no M at all, B carries M=-5, C carries no M at all, and
+        // they come in that order in the directory. Sorting them by mosaic
+        // index would draw B (-5) first and A (-1) over it, which puts a
+        // different tile on top of the column x=1 that A and B share — C
+        // reaches x=2 and x=3 only.
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[(b'M', -5, 1)], vec![20, 21, 22, 23]),
+            mosaic_tile(2, &[], vec![30, 31, 32, 33]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 4),
+            vec![10, 20, 30, 31, 12, 22, 32, 33],
+            "a mixed plane with no non-negative mosaic index keeps its directory order"
+        );
+    }
+
+    /// A SORTED plane that mixes a negative mosaic index with an absent one
+    /// draws the NEGATIVE index first: the tile without an `M` (index -1) is
+    /// above the tile with `M = -5` and below the tile with `M = 0`.
+    #[test]
+    fn sorted_mixed_plane_draws_the_negative_mosaic_index_first() {
+        // A carries no M at all, B carries M=-5 and C carries M=0, so the
+        // plane IS sorted (C's index is non-negative) and the draw order is
+        // B (-5), A (-1), C (0). A and B share the column x=1, and A is drawn
+        // over B there, so the plane carries A's column 1 (11, 13) there.
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[(b'M', -5, 1)], vec![20, 21, 22, 23]),
+            mosaic_tile(2, &[(b'M', 0, 1)], vec![30, 31, 32, 33]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 4),
+            vec![10, 11, 30, 31, 12, 13, 32, 33],
+            "a sorted mixed plane draws the negative mosaic index first"
+        );
+    }
+
+    /// Two tiles with the SAME mosaic index keep their subblock-directory
+    /// order: the sort is stable.
+    #[test]
+    fn equal_mosaic_indices_keep_the_subblock_directory_order() {
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[(b'M', 4, 1)], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[(b'M', 4, 1)], vec![20, 21, 22, 23]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 3),
+            vec![10, 20, 21, 12, 22, 23],
+            "tiles that share a mosaic index keep their directory order"
+        );
+    }
+
+    /// A subblock that carries SEVERAL mosaic dimension entries takes the FIRST
+    /// one in file order: `czifile` walks the dimension entries in reverse
+    /// (czifile.py:4609), so the first M in the file is the last one assigned.
+    #[test]
+    fn duplicate_mosaic_dimension_takes_the_first_one() {
+        // A carries M=7 and then M=3; its mosaic index is 7, so it is drawn
+        // after B's M=5 and ends up on top.
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[(b'M', 7, 1), (b'M', 3, 1)], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[(b'M', 5, 1)], vec![20, 21, 22, 23]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 3),
+            vec![10, 11, 21, 12, 13, 23],
+            "the FIRST mosaic dimension entry wins"
+        );
+    }
+
+    /// A packed mosaic dimension (`M.Size > 1`) is ACCEPTED, like `czifile`
+    /// accepts it (czifile.py:4616-4617 takes the Start and ignores the Size).
+    /// It used to fail the open of the whole file.
+    #[test]
+    fn packed_mosaic_dimension_still_opens_the_file() {
+        let reader = open_synth(&build_czi_raw(&[
+            mosaic_tile(0, &[(b'M', 1, 2)], vec![10, 11, 12, 13]),
+            mosaic_tile(1, &[(b'M', 0, 1)], vec![20, 21, 22, 23]),
+        ]));
+        assert_eq!(
+            mosaic_plane(&reader, 3),
+            vec![10, 11, 21, 12, 13, 23],
+            "a packed mosaic axis uses its Start and does not refuse the file"
+        );
     }
 
     /// Two tiny 2x2 tiles placed far apart (A at (0,0), B at (70000,70000)) so

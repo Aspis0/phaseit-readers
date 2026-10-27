@@ -24,7 +24,9 @@
 //!   tag (34412), a little-endian binary struct on the first IFD.
 //!
 //! `(t, c, z)` → data:
-//! * page index in the real-page list = `t * Zdim + z` (T outer, Z inner);
+//! * page index in the real-page list = `scene * Zdim + z` — a scene owns a
+//!   contiguous block of `Zdim` pages, and a file with a single scene has
+//!   `scene = 0`;
 //! * channel `c` selects planar strip block `c` within that page.
 //!
 //! Color convention: this reader maps color onto `dims.c` and always sets
@@ -32,23 +34,33 @@
 //! are a CZI-only convention; see
 //! [`SceneMeta::samples`](crate::types::SceneMeta::samples).
 //!
-//! The IFD/strip-layout facts above and the CZ-LSM-Info field layout are
-//! ported from the reference reader `tifffile` (Christoph Gohlke,
-//! BSD-3-Clause, <https://github.com/cgohlke/tifffile>). Only structural facts
-//! and Gohlke's algorithms are reproduced; no code was copied (the IFD/strip
-//! parsing here is a from-scratch hand-rolled binary reader, not a port of
-//! tifffile's Python source). Keep this attribution if you touch the framing
-//! or the CZ-LSM-Info offsets.
+//! The IFD/strip-layout facts above are ported from the reference reader
+//! `tifffile` (Christoph Gohlke, BSD-3-Clause,
+//! <https://github.com/cgohlke/tifffile>). Only structural facts and Gohlke's
+//! algorithms are reproduced; no code was copied (the IFD/strip parsing here
+//! is a from-scratch hand-rolled binary reader, not a port of tifffile's
+//! Python source). Keep this attribution if you touch the framing or the
+//! IFD/strip parsing.
+//!
+//! The CZ-LSM-Info field layout, the channel-colours block and the tile and
+//! position counts are facts of the Zeiss LSM format itself; they were
+//! verified byte-for-byte against the owner's LSM files (every file of that
+//! corpus carries a 464-byte struct with the magic `0x0400494C`, the voxel
+//! sizes at +40/+48/+56, the channel-colours pointer at +108 and the tile and
+//! position counts at +264/+268).
 
 use std::path::Path;
 
-use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use memmap2::Mmap;
 
 use crate::error::{Error, Result};
 use crate::io::map_file;
+use crate::lsm_bytes::{read_u16, read_u32, read_u8};
+use crate::lsm_channel_colors::read_channel_meta;
+use crate::lsm_cz_info::{self, CzTag};
+use crate::lsm_positions::{build_scenes, LsmLayout};
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, PxSizeUm, SceneMeta,
+    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, PxSizeUm,
 };
 
 /// Private LSM tag carrying the `CZ-LSM-Info` geometry/calibration struct.
@@ -85,14 +97,16 @@ pub struct LsmReader {
     /// practice, but we honour the header either way).
     endian: Endian,
     dtype: DType,
-    /// Canonical dims (mirror of the single scene's dims, cached for `plane`).
+    /// Canonical dims (every scene of a file shares them, so one copy is
+    /// enough; cached for `plane`).
     dims: Dims5,
-    /// Number of Z planes per time point (== `dims.z`).
-    z_dim: usize,
+    /// The tile/position layout: how many scenes the file holds and which
+    /// real page each scene's planes live on.
+    layout: LsmLayout,
     /// Strips per channel within a page (`offsets.len() / channels`); 1 for the
     /// single-strip planar layout LSM uses.
     strips_per_channel: usize,
-    /// Real (non-reduced) pages, in file order. `real_pages[t*z_dim + z]`.
+    /// Real (non-reduced) pages, in file order. `real_pages[page_index]`.
     real_pages: Vec<PageStrips>,
 }
 
@@ -114,21 +128,29 @@ impl ImageReader for LsmReader {
         // Size guard: refuse absurd plane dimensions before we ever index bytes.
         dims.checked_plane_bytes(parsed.dtype)?;
 
-        let channels = vec![ChannelMeta::default(); dims.c];
-
-        let scene = SceneMeta {
-            dims,
-            dtype: parsed.dtype,
-            samples: 1, // LSM planes are grayscale (one sample per pixel).
-            px_size_um: parsed.px_size_um,
-            channels,
-            palette: None,
-            name: name.clone(),
+        // Channel names and display colours come from the file's
+        // channel-colours block. A file without one still opens; its channels
+        // stay unnamed and colourless.
+        let channels = match parsed.channel_colors_offset {
+            Some(offset) => read_channel_meta(&mmap[..], offset, parsed.endian, dims.c),
+            None => vec![ChannelMeta::default(); dims.c],
         };
+
+        // One scene per tile/position: a mosaic shot is published as one
+        // scene per tile, in file order, named the way Bio-Formats names its
+        // series ("<name> #1", "<name> #2", …).
+        let scenes = build_scenes(
+            &name,
+            &parsed.layout,
+            dims,
+            parsed.dtype,
+            parsed.px_size_um,
+            channels,
+        );
 
         let meta = ImageMeta {
             name,
-            scenes: vec![scene],
+            scenes,
         };
 
         Ok(LsmReader {
@@ -137,7 +159,7 @@ impl ImageReader for LsmReader {
             endian: parsed.endian,
             dtype: parsed.dtype,
             dims,
-            z_dim: parsed.z,
+            layout: parsed.layout,
             strips_per_channel: parsed.strips_per_channel,
             real_pages: parsed.real_pages,
         })
@@ -149,22 +171,25 @@ impl ImageReader for LsmReader {
 
     fn plane(&self, scene: usize, t: usize, c: usize, z: usize) -> Result<Plane> {
         let d = self.dims;
-        // LSM is single-scene: only scene 0 exists. Reject any other coordinate
-        // as OutOfRange (never panic, never wrap).
-        if scene != 0 || t >= d.t || c >= d.c || z >= d.z {
+        // Every coordinate must be inside the scene it addresses. Reject any
+        // other coordinate as OutOfRange (never panic, never wrap).
+        if scene >= self.layout.scene_count() || t >= d.t || c >= d.c || z >= d.z {
             return Err(Error::OutOfRange { scene, t, c, z });
         }
 
         // Size the OUTPUT plane BEFORE reserving/reading anything.
         let plane_bytes = d.checked_plane_bytes(self.dtype)?;
 
-        // (t, c, z) → real page (T outer, Z inner) → planar strip block c.
+        // (scene, t, c, z) → real page → planar strip block c. A scene owns a
+        // contiguous block of Z pages, and inside a scene the pages run
+        // Z-ascending (the reader refuses T > 1, whose ordering is not
+        // established).
         // TODO(perf): O(1) here, but `open()` walks the whole IFD chain once;
         // that is fine for LSM's tens of pages.
-        let page_idx = t
-            .checked_mul(self.z_dim)
-            .and_then(|v| v.checked_add(z))
-            .ok_or_else(|| Error::Decode("LSM page index overflow".to_string()))?;
+        let page_idx = self
+            .layout
+            .page_index(scene, z)
+            .ok_or(Error::OutOfRange { scene, t, c, z })?;
         let page = self
             .real_pages
             .get(page_idx)
@@ -230,6 +255,11 @@ struct ParsedLsm {
     x: usize,
     strips_per_channel: usize,
     px_size_um: Option<PxSizeUm>,
+    /// The tile/position layout: how many scenes the file holds and which
+    /// real page each scene's planes live on.
+    layout: LsmLayout,
+    /// The file offset of the channel-colours block, when the file states one.
+    channel_colors_offset: Option<usize>,
     real_pages: Vec<PageStrips>,
 }
 
@@ -245,7 +275,7 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
     let mut next = read_u32(buf, 4, endian)? as u64;
     let mut real_pages: Vec<PageStrips> = Vec::new();
     let mut first_ifd_props: Option<FirstPage> = None;
-    let mut cz_off: Option<usize> = None;
+    let mut cz_tag: Option<CzTag> = None;
 
     let mut visited = 0usize;
     while next != 0 {
@@ -261,8 +291,8 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
             .map_err(|_| Error::Parse("LSM IFD offset overflows usize".to_string()))?;
         let (page, props, cz, next_ifd) = parse_ifd(buf, ifd, endian)?;
 
-        if cz_off.is_none() {
-            cz_off = cz;
+        if cz_tag.is_none() {
+            cz_tag = cz;
         }
         // Keep only real focal planes (drop reduced / thumbnail sub-files).
         if !props.reduced {
@@ -354,10 +384,10 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
 
     // Geometry comes from CZ-LSM-Info, cross-checked against the pixel data so a
     // malformed header can never silently mis-shape the volume.
-    let cz_off = cz_off.ok_or_else(|| {
+    let cz_tag = cz_tag.ok_or_else(|| {
         Error::Decode("LSM is missing the CZ-LSM-Info tag (34412)".to_string())
     })?;
-    let geo = parse_cz_lsm_info(buf, cz_off, endian)?;
+    let geo = lsm_cz_info::parse(buf, cz_tag, endian)?;
 
     let (x, y) = (first.width as usize, first.height as usize);
     let samples = first.samples.max(1) as usize;
@@ -379,9 +409,9 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
     let z = geo.dim_z.max(1) as usize;
     let t = geo.dim_time.max(1) as usize;
 
-    // The `page_idx = t*Zdim + z` (T-outer/Z-inner) mapping is only validated at
-    // t=1 (our only sample). A real multi-T LSM with a different on-disk T/Z
-    // convention would silently misassign planes, so we fail closed here.
+    // The page order inside a scene is only validated at t=1 (our only
+    // sample). A real multi-T LSM with a different on-disk T/Z convention
+    // would silently misassign planes, so we fail closed here.
     // TODO: re-enable once a real multi-T .lsm is validated in the parity suite.
     if t > 1 {
         return Err(Error::Unsupported(
@@ -406,14 +436,22 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
     }
     let strips_per_channel = first.strips / channels;
 
-    // Real page count must equal T*Z (each page = one Z at one T; channels live
-    // inside the page as planar strips).
-    let expected_pages = t
-        .checked_mul(z)
-        .ok_or_else(|| Error::Decode("LSM T*Z overflow".to_string()))?;
+    // The tile/position layout: how many scenes the file holds, and how many
+    // pages each of them owns.
+    let layout = LsmLayout::new(geo.dim_p, geo.dim_m, z)?;
+
+    // The real page count must equal T*Z per scene times the number of
+    // scenes: each page = one Z at one T of one tile/position, and channels
+    // live inside the page as planar strips.
+    let expected_pages = layout
+        .expected_pages()
+        .ok_or_else(|| Error::Decode("LSM T*Z*P*M overflow".to_string()))?;
     if real_pages.len() != expected_pages {
+        // The wording names the product the counts imply: T*Z for a plain
+        // file, T*Z*P*M for a tiled or multi-position one.
+        let implied = if layout.scene_count() == 1 { "T*Z" } else { "T*Z*P*M" };
         return Err(Error::Decode(format!(
-            "LSM has {} real pages but CZ-LSM-Info implies T*Z = {expected_pages}",
+            "LSM has {} real pages but CZ-LSM-Info implies {implied} = {expected_pages}",
             real_pages.len()
         )));
     }
@@ -428,6 +466,8 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
         x,
         strips_per_channel,
         px_size_um: geo.px_size_um,
+        layout,
+        channel_colors_offset: geo.channel_colors_offset,
         real_pages,
     })
 }
@@ -489,12 +529,12 @@ fn read_tiff_header(buf: &[u8]) -> Result<Endian> {
 }
 
 /// Parse one IFD at `ifd_off`: return its strip table, scalar properties, the
-/// CZ-LSM-Info data offset (if the tag is present here), and the next IFD offset.
+/// CZ-LSM-Info tag (if it is present here), and the next IFD offset.
 fn parse_ifd(
     buf: &[u8],
     ifd_off: usize,
     e: Endian,
-) -> Result<(PageStrips, IfdProps, Option<usize>, u64)> {
+) -> Result<(PageStrips, IfdProps, Option<CzTag>, u64)> {
     let count = read_u16(buf, ifd_off, e)? as usize;
     let entries_start = ifd_off + 2;
     // Each entry is 12 bytes; the next-IFD pointer follows the entries.
@@ -515,7 +555,7 @@ fn parse_ifd(
     };
     let mut offsets: Vec<u64> = Vec::new();
     let mut byte_counts: Vec<u64> = Vec::new();
-    let mut cz_off: Option<usize> = None;
+    let mut cz_tag: Option<CzTag> = None;
 
     for i in 0..count {
         let eoff = entries_start + i * 12;
@@ -566,7 +606,12 @@ fn parse_ifd(
                         "LSM CZ-LSM-Info tag has {total} inline bytes (≤4); expected an offset"
                     )));
                 }
-                cz_off = Some(read_u32(buf, eoff + 8, e)? as usize);
+                let declared_bytes = usize::try_from(total)
+                    .map_err(|_| Error::Decode("LSM CZ-LSM-Info size overflows usize".to_string()))?;
+                cz_tag = Some(CzTag {
+                    offset: read_u32(buf, eoff + 8, e)? as usize,
+                    declared_bytes,
+                });
             }
             _ => {}
         }
@@ -586,73 +631,11 @@ fn parse_ifd(
             bytes: byte_counts,
         },
         props,
-        cz_off,
+        cz_tag,
         next,
     ))
 }
 
-/// CZ-LSM-Info geometry + calibration we consume.
-struct CzGeometry {
-    dim_x: i32,
-    dim_y: i32,
-    dim_z: i32,
-    dim_channels: i32,
-    dim_time: i32,
-    px_size_um: Option<PxSizeUm>,
-}
-
-/// Parse the fixed-offset fields of the CZ-LSM-Info struct (little-endian binary,
-/// but we honour the container endianness). Only the stable dimension i32s at
-/// offsets 8..28 and the voxel-size f64s at 40/48/56 are read; everything else
-/// (channel colours, LUTs, …) is deliberately ignored.
-fn parse_cz_lsm_info(buf: &[u8], off: usize, e: Endian) -> Result<CzGeometry> {
-    // Need at least through DimensionTime (offset 24, 4 bytes ⇒ 28).
-    if off + 28 > buf.len() {
-        return Err(Error::Decode(
-            "LSM CZ-LSM-Info truncated before dimension fields".to_string(),
-        ));
-    }
-    let dim_x = read_i32(buf, off + 8, e)?;
-    let dim_y = read_i32(buf, off + 12, e)?;
-    let dim_z = read_i32(buf, off + 16, e)?;
-    let dim_channels = read_i32(buf, off + 20, e)?;
-    let dim_time = read_i32(buf, off + 24, e)?;
-
-    if dim_x <= 0 || dim_y <= 0 || dim_z < 0 || dim_channels <= 0 || dim_time < 0 {
-        return Err(Error::Unsupported(format!(
-            "LSM CZ-LSM-Info has non-positive dimensions \
-             (X={dim_x} Y={dim_y} Z={dim_z} C={dim_channels} T={dim_time})"
-        )));
-    }
-
-    // Voxel sizes (metres) are best-effort: present only if the struct reaches
-    // offset 64 and all three are strictly positive.
-    let px_size_um = if off + 64 <= buf.len() {
-        let vx = read_f64(buf, off + 40, e)?;
-        let vy = read_f64(buf, off + 48, e)?;
-        let vz = read_f64(buf, off + 56, e)?;
-        if vx > 0.0 && vy > 0.0 && vz > 0.0 {
-            Some(PxSizeUm {
-                z: (vz * 1e6) as f32,
-                y: (vy * 1e6) as f32,
-                x: (vx * 1e6) as f32,
-            })
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    Ok(CzGeometry {
-        dim_x,
-        dim_y,
-        dim_z,
-        dim_channels,
-        dim_time,
-        px_size_um,
-    })
-}
 
 /// Map a `(BitsPerSample, SampleFormat)` pair to our [`DType`]. Mirrors the
 /// TIFF reader's table (1=uint, 2=int, 3=float).
@@ -737,9 +720,7 @@ fn read_int_at(buf: &[u8], ty: u16, off: usize, e: Endian) -> Result<u64> {
     Ok(match ty {
         3 | 8 => read_u16(buf, off, e)? as u64,
         4 | 9 | 11 => read_u32(buf, off, e)? as u64,
-        1 | 6 | 7 => *buf
-            .get(off)
-            .ok_or_else(|| bounds(off, 1, buf.len()))? as u64,
+        1 | 6 | 7 => read_u8(buf, off)? as u64,
         other => {
             return Err(Error::Decode(format!(
                 "LSM: cannot read type {other} as an integer"
@@ -749,52 +730,6 @@ fn read_int_at(buf: &[u8], ty: u16, off: usize, e: Endian) -> Result<u64> {
 }
 
 // --- bounds-checked primitive readers ---------------------------------------
-
-fn read_u16(buf: &[u8], off: usize, e: Endian) -> Result<u16> {
-    let s = buf
-        .get(off..off + 2)
-        .ok_or_else(|| bounds(off, 2, buf.len()))?;
-    Ok(match e {
-        Endian::Little => LittleEndian::read_u16(s),
-        Endian::Big => BigEndian::read_u16(s),
-    })
-}
-
-fn read_u32(buf: &[u8], off: usize, e: Endian) -> Result<u32> {
-    let s = buf
-        .get(off..off + 4)
-        .ok_or_else(|| bounds(off, 4, buf.len()))?;
-    Ok(match e {
-        Endian::Little => LittleEndian::read_u32(s),
-        Endian::Big => BigEndian::read_u32(s),
-    })
-}
-
-fn read_i32(buf: &[u8], off: usize, e: Endian) -> Result<i32> {
-    let s = buf
-        .get(off..off + 4)
-        .ok_or_else(|| bounds(off, 4, buf.len()))?;
-    Ok(match e {
-        Endian::Little => LittleEndian::read_i32(s),
-        Endian::Big => BigEndian::read_i32(s),
-    })
-}
-
-fn read_f64(buf: &[u8], off: usize, e: Endian) -> Result<f64> {
-    let s = buf
-        .get(off..off + 8)
-        .ok_or_else(|| bounds(off, 8, buf.len()))?;
-    Ok(match e {
-        Endian::Little => LittleEndian::read_f64(s),
-        Endian::Big => BigEndian::read_f64(s),
-    })
-}
-
-fn bounds(off: usize, need: usize, len: usize) -> Error {
-    Error::Parse(format!(
-        "LSM read out of bounds: need {need} bytes at offset {off}, file is {len} bytes"
-    ))
-}
 
 fn overflow() -> Error {
     Error::Decode("LSM: arithmetic overflow while parsing IFD".to_string())
@@ -900,59 +835,6 @@ mod tests {
         assert!(matches!(read_tiff_header(b"XY\x2a\x00\x00\x00\x00\x00"), Err(Error::Parse(_))));
     }
 
-    #[test]
-    fn cz_lsm_info_dims_and_voxels() {
-        // Build a 64-byte CZ-LSM-Info at offset 4.
-        let base = 4usize;
-        let mut buf = vec![0u8; base + 64];
-        let put_i32 = |buf: &mut [u8], at: usize, v: i32| {
-            buf[base + at..base + at + 4].copy_from_slice(&v.to_le_bytes());
-        };
-        let put_f64 = |buf: &mut [u8], at: usize, v: f64| {
-            buf[base + at..base + at + 8].copy_from_slice(&v.to_le_bytes());
-        };
-        put_i32(&mut buf, 8, 1024); // DimX
-        put_i32(&mut buf, 12, 1024); // DimY
-        put_i32(&mut buf, 16, 35); // DimZ
-        put_i32(&mut buf, 20, 2); // DimChannels
-        put_i32(&mut buf, 24, 1); // DimTime
-        put_f64(&mut buf, 40, 0.06589411e-6); // VoxelSizeX (m)
-        put_f64(&mut buf, 48, 0.06589411e-6); // VoxelSizeY
-        put_f64(&mut buf, 56, 0.5e-6); // VoxelSizeZ
-
-        let geo = parse_cz_lsm_info(&buf, base, Endian::Little).unwrap();
-        assert_eq!(geo.dim_x, 1024);
-        assert_eq!(geo.dim_z, 35);
-        assert_eq!(geo.dim_channels, 2);
-        assert_eq!(geo.dim_time, 1);
-        let px = geo.px_size_um.unwrap();
-        assert!((px.z - 0.5).abs() < 1e-6);
-        assert!((px.x - 0.06589411).abs() < 1e-4);
-    }
-
-    #[test]
-    fn cz_lsm_info_zero_voxels_yield_none() {
-        let base = 0usize;
-        let mut buf = vec![0u8; 64];
-        buf[8..12].copy_from_slice(&1024i32.to_le_bytes());
-        buf[12..16].copy_from_slice(&1024i32.to_le_bytes());
-        buf[16..20].copy_from_slice(&1i32.to_le_bytes());
-        buf[20..24].copy_from_slice(&1i32.to_le_bytes());
-        buf[24..28].copy_from_slice(&1i32.to_le_bytes());
-        // Voxel sizes left at 0 → None.
-        let geo = parse_cz_lsm_info(&buf, base, Endian::Little).unwrap();
-        assert!(geo.px_size_um.is_none());
-    }
-
-    #[test]
-    fn cz_lsm_info_truncated_errors() {
-        let buf = vec![0u8; 20]; // < 28 bytes of struct
-        assert!(matches!(
-            parse_cz_lsm_info(&buf, 0, Endian::Little),
-            Err(Error::Decode(_))
-        ));
-    }
-
     // --- Strip-count check: minimal hand-rolled classic-TIFF/LSM byte builder ---
     //
     // `parse_lsm` takes a plain `&[u8]` (no file I/O), so a synthetic in-memory
@@ -1017,8 +899,11 @@ mod tests {
         let next0_off = ifd0_off + 2 + entries0.len();
         buf[next0_off..next0_off + 4].copy_from_slice(&(ifd1_off as u32).to_le_bytes());
 
-        // --- CZ-LSM-Info: DimX/Y/Z/Channels/Time i32s at +8/+12/+16/+20/+24. ---
+        // --- CZ-LSM-Info: the magic, the struct's size and the dimension
+        // i32s at +8/+12/+16/+20/+24. ---
         // T=1, Z=2 -> 2 real pages expected (matches the 2 IFDs below).
+        buf[cz_off..cz_off + 4].copy_from_slice(&0x0400_494Cu32.to_le_bytes()); // magic
+        buf[cz_off + 4..cz_off + 8].copy_from_slice(&(cz_len as u32).to_le_bytes()); // size
         buf[cz_off + 8..cz_off + 12].copy_from_slice(&2i32.to_le_bytes()); // DimX
         buf[cz_off + 12..cz_off + 16].copy_from_slice(&2i32.to_le_bytes()); // DimY
         buf[cz_off + 16..cz_off + 20].copy_from_slice(&2i32.to_le_bytes()); // DimZ
