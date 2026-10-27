@@ -21,7 +21,7 @@ ndarray = { version = "0.17", optional = true }   # OPTIONAL (feature-gated)
 
 [dev-dependencies]
 ndarray-npy = "0.10"   # dev-only, for the parity tests
-serde_json = "1"        # dev-only: parse ND2 parity manifest_real.json
+serde_json = "1"        # dev-only: parse the ND2 and CZI parity manifests
 
 [build-dependencies]
 cc = "1"   # only used when the `jpegxr` feature is on (compiles vendored jxrlib)

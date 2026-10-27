@@ -38,6 +38,10 @@ pub mod nd2_reader;
 pub mod tiff_calibration;
 pub mod tiff_reader;
 
+mod lsm_bytes;
+mod lsm_channel_colors;
+mod lsm_cz_info;
+mod lsm_positions;
 mod tiff_imagej;
 mod tiff_ome;
 mod tiff_ome_geometry;

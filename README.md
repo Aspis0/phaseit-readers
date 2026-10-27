@@ -53,7 +53,14 @@ rest rather than guess:
   JPEG-XR-compressed Gray32Float or Bgr48 tile is refused (an uncompressed
   one is decoded), and so are subblocks that pack several values of one axis
   (line-scan style) — that one fails the open of the whole file, it is not a
-  per-scene refusal. A scene that LOSES a full-resolution tile — a tile whose
+  per-scene refusal. A packed **mosaic** axis (`M.Size > 1`) is the exception:
+  it is accepted, like `czifile` does, because the mosaic index only decides
+  the draw order and contributes no pixels. Where two tiles of a plane
+  overlap, the tile with the **higher mosaic index (`M`) is drawn on top** —
+  the same order `czifile` composites a mosaic in — but only in a plane that
+  carries at least one non-negative `M`; a plane whose `M` values are all
+  negative is composed in its subblock-directory order instead. A scene that
+  LOSES a full-resolution tile — a tile whose
   pixel type the reader does not model, or a tile whose pixel span does not
   fit the file — is refused by name, with the count of the tiles that were
   skipped and why they were skipped; it is never published smaller than the
@@ -114,27 +121,41 @@ run: the reference dumps, the third-party sample below and the real JPEG-XR
 tiles are gated by it as well. A required run therefore needs the generated
 artifacts too, and none of them is in the repository: `tests/parity/dump_ref.py`
 makes the `_ref/` dumps of the TIFF and LSM samples,
-`tests/parity/dump_ref_lif.py` the LIF ones, and `tests/parity/dump_ref_nd2.py`
-the planes of `tests/fixtures/nd2_real/` (see `tests/parity/README.md`). The
-`tests/fixtures/jpegxr_real/` folder has no producer in this repository, so a
-required run stops at the JPEG-XR real-tile check unless that folder is
-supplied by hand. The folder is expected to hold:
+`tests/parity/dump_ref_lif.py` the LIF ones, `tests/parity/dump_ref_nd2.py`
+the planes of `tests/fixtures/nd2_real/`, and `tests/parity/dump_ref_lsm.py`
+the Bio-Formats reference of the LSM tile scan (see `tests/parity/README.md`).
+The `tests/fixtures/jpegxr_real/` folder is made by
+`tests/parity/extract_jxr_tiles.py`, and the reference regions of the JPEG-XR
+sample by `tests/parity/dump_ref_czi_jxr.py`. The folder is expected to hold:
 
-| Relative path | What it is |
-|---|---|
-| `czi/mosaic.czi` | a Zeiss CZI of several tiles per (C,Z), composed into one scene |
-| `czi/stitched.czi` | a pre-stitched Zeiss CZI, one tile per (C,Z) |
-| `lif/control.lif` | a Leica LIF with four images in the `.lif` |
-| `lif/four-scene.lif` | a Leica LIF with four series and a companion `.lifext` |
-| `lsm/stack.lsm` | a Zeiss LSM stack |
-| `nd2/stack.nd2` | a Nikon ND2 stack |
-| `tiff/rgb.tif` | an RGB TIFF (three interleaved components) |
-| `tiff/calibrated-a.tif` | a TIFF that states its scale |
-| `tiff/calibrated-b.tif` | a TIFF that states its scale |
-| `tiff/uncalibrated.tif` | a TIFF that states no scale |
+| Relative path | What it is | Where it comes from |
+|---|---|---|
+| `czi/brightfield-jxr.czi` | a Zeiss Axioscan 20x brightfield CZI of a DAB-stained human section, JPEG-XR compressed, 1958 full-resolution tiles | Garcia, Mario, *Human DAB staining Axioscan BF 20x*, Zenodo record 11234863, <https://doi.org/10.5281/zenodo.11234863> (CC-BY-4.0) |
+| `czi/mosaic.czi` | a Zeiss CZI of several tiles per (C,Z), composed into one scene | — |
+| `czi/stitched.czi` | a pre-stitched Zeiss CZI, one tile per (C,Z) | — |
+| `lif/control.lif` | a Leica LIF with four images in the `.lif` | — |
+| `lif/four-scene.lif` | a Leica LIF with four series and a companion `.lifext` | — |
+| `lsm/stack.lsm` | a Zeiss LSM stack | — |
+| `lsm/tilescan.lsm` | a Zeiss LSM mosaic shot as a 7x7 grid of tiles, 49 pages | — |
+| `nd2/stack.nd2` | a Nikon ND2 stack | — |
+| `tiff/rgb.tif` | an RGB TIFF (three interleaved components) | — |
+| `tiff/calibrated-a.tif` | a TIFF that states its scale | — |
+| `tiff/calibrated-b.tif` | a TIFF that states its scale | — |
+| `tiff/uncalibrated.tif` | a TIFF that states no scale | — |
 
 One test names its file directly, through `PHASIT_CZI_BGR_SAMPLE`, because that
 sample is a third-party file rather than an acquisition.
+
+The third-party sample under `czi/brightfield-jxr.czi` is published as:
+
+> Garcia, Mario. *Human DAB staining Axioscan BF 20x*. Zenodo, 2024.
+> <https://doi.org/10.5281/zenodo.11234863>. Licensed
+> [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode).
+
+The repository ships NO derived data from it: the reference regions and the
+extracted tiles are generated locally and are gitignored, so the attribution
+above is a courtesy rather than a redistribution obligation. Anyone who
+redistributes them must keep the attribution and the CC-BY-4.0 licence.
 
 Real-file bit-exact parity vs the Python BSD references (`tifffile`, `liffile`,
 `nd2`) runs when those files and the generated `_ref/` dumps are present; see

@@ -531,13 +531,13 @@ pub struct SceneMeta {
     /// Samples per pixel for this scene's planes (`1` = grayscale, `3` = RGB).
     /// Every [`Plane`] this scene yields carries this same `samples` value.
     ///
-    /// NOTE: `samples > 1` is currently **CZI's** color convention — the CZI
-    /// reader keeps native color (Bgr24/Bgr48) as interleaved samples rather
-    /// than exploding it into `dims.c`, so acquisition channels and color
-    /// components never conflate. The TIFF/LSM/LIF readers instead map color
-    /// onto `dims.c` and always set `samples == 1`. (Unifying all readers'
-    /// color handling is out of scope; this field is the per-scene truth
-    /// regardless of which convention produced it.)
+    /// NOTE: `samples > 1` is the convention of the readers that keep native
+    /// colour: the CZI reader keeps colour (Bgr24/Bgr48) as interleaved
+    /// samples rather than exploding it into `dims.c`, and the plain-TIFF
+    /// reader does the same for an RGB page. The LSM/LIF readers instead map
+    /// colour onto `dims.c` and always set `samples == 1`. (Unifying all
+    /// readers' colour handling is out of scope; this field is the per-scene
+    /// truth regardless of which convention produced it.)
     pub samples: u32,
     /// Physical pixel size in micrometres. `None` when the format does not
     /// record calibration.
@@ -557,8 +557,10 @@ pub struct SceneMeta {
 
 /// Image-level metadata, cached at `open()` time by a reader.
 ///
-/// Single-scene formats (TIFF/LSM) build a one-element [`scenes`](Self::scenes)
-/// vector; multi-scene formats (LIF/CZI/ND2) one entry per scene.
+/// Most files hold one scene and build a one-element [`scenes`](Self::scenes)
+/// vector; the multi-scene formats (LIF/CZI/ND2) build one entry per scene, as
+/// does an LSM tile or multi-position file, whose CZ-LSM-Info counts state how
+/// many separate acquisitions it holds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImageMeta {
     /// File-level display name (typically the file name).

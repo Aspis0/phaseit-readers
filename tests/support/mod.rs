@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 pub mod czi;
+pub mod lsm;
 pub mod scratch;
 
 use std::fs::{self, File};

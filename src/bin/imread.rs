@@ -2,16 +2,38 @@
 //! `imread` — CLI front-end for phasit-imread.
 //!
 //! Built solely on phasit-imread's public API (`phasit_imread::{open,
-//! detect_format}` + the `ImageReader` trait). Two subcommands:
+//! detect_format}` + the `ImageReader` trait). Four subcommands:
 //!
 //! ```text
 //! imread info <file>
 //! imread dump <file> <scene> <t> <c> <z> <out>
+//! imread json <file>
+//! imread sweep --json <listfile>
 //! ```
+//!
+//! The two JSON modes report one file as one line of JSON — the format the
+//! reader detected, the outcome of the open, every scene's metadata, the
+//! scenes the reader refused, and the statistics and hash of the planes the
+//! sweep decodes. `imread json` reports one file; `imread sweep` reports every
+//! file of a list file.
 
 use std::path::{Path, PathBuf};
 
-use phasit_imread::{PlaneBuf, Result as ImreadResult};
+use phasit_imread::Result as ImreadResult;
+
+// The bin's own modules live in `src/bin/imread/`, one responsibility each.
+// Rust resolves a module of `src/bin/imread.rs` next to that file, so the path
+// of each module is named here.
+#[path = "imread/batch.rs"]
+mod batch;
+#[path = "imread/json.rs"]
+mod json;
+#[path = "imread/plane.rs"]
+mod plane;
+#[path = "imread/report.rs"]
+mod report;
+#[path = "imread/sha256.rs"]
+mod sha256;
 
 /// A parsed, ready-to-run CLI command.
 #[derive(Debug)]
@@ -27,12 +49,20 @@ enum Command {
         z: usize,
         out: PathBuf,
     },
+    Json {
+        file: PathBuf,
+    },
+    Sweep {
+        list: PathBuf,
+    },
 }
 
 /// Short usage/help text, printed on any argument error.
 fn usage_text() -> String {
     format!(
-        "imread (phasit-imread {})\n\nusage:\n  imread info <file>\n  imread dump <file> <scene> <t> <c> <z> <out>\n",
+        "imread (phasit-imread {})\n\nusage:\n  imread info <file>\n  \
+         imread dump <file> <scene> <t> <c> <z> <out>\n  \
+         imread json <file>\n  imread sweep --json <listfile>\n",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -49,6 +79,12 @@ fn parse_usize(name: &str, raw: &str) -> Result<usize, String> {
 fn parse_args(args: &[String]) -> Result<Command, String> {
     match args {
         [sub, file] if sub == "info" => Ok(Command::Info { file: PathBuf::from(file) }),
+        [sub, file] if sub == "json" => Ok(Command::Json { file: PathBuf::from(file) }),
+        [sub, flag, list] if sub == "sweep" && flag == "--json" => {
+            Ok(Command::Sweep {
+                list: PathBuf::from(list),
+            })
+        }
         [sub, file, scene, t, c, z, out] if sub == "dump" => {
             let scene = parse_usize("scene", scene)?;
             let t = parse_usize("t", t)?;
@@ -73,6 +109,14 @@ fn run(cmd: Command) -> ImreadResult<()> {
     match cmd {
         Command::Info { file } => run_info(&file),
         Command::Dump { file, scene, t, c, z, out } => run_dump(&file, scene, t, c, z, &out),
+        Command::Json { file } => {
+            println!("{}", batch::guarded_report(&file));
+            Ok(())
+        }
+        Command::Sweep { list } => {
+            batch::run(&list)?;
+            Ok(())
+        }
     }
 }
 
@@ -152,18 +196,8 @@ fn run_dump(path: &Path, scene: usize, t: usize, c: usize, z: usize, out: &Path)
         plane.samples()
     );
 
-    std::fs::write(out, plane_to_ne_bytes(&plane.data))?;
+    std::fs::write(out, plane::to_ne_bytes(&plane.data))?;
     Ok(())
-}
-
-/// Serialize a [`PlaneBuf`] to a flat `Vec<u8>` of native-endian sample bytes.
-fn plane_to_ne_bytes(buf: &PlaneBuf) -> Vec<u8> {
-    match buf {
-        PlaneBuf::U8(v) => v.clone(),
-        PlaneBuf::U16(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
-        PlaneBuf::I16(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
-        PlaneBuf::F32(v) => v.iter().flat_map(|x| x.to_ne_bytes()).collect(),
-    }
 }
 
 fn main() {
@@ -245,12 +279,32 @@ mod tests {
     }
 
     #[test]
-    fn plane_to_ne_bytes_u16_roundtrip() {
-        let buf = PlaneBuf::U16(vec![1, 0x0102]);
-        let bytes = plane_to_ne_bytes(&buf);
-        assert_eq!(bytes.len(), 4);
-        let a = u16::from_ne_bytes([bytes[0], bytes[1]]);
-        let b = u16::from_ne_bytes([bytes[2], bytes[3]]);
-        assert_eq!([a, b], [1, 0x0102]);
+    fn json_parses() {
+        let cmd = parse_args(&args(&["json", "a.tif"])).unwrap();
+        match cmd {
+            Command::Json { file } => assert_eq!(file, PathBuf::from("a.tif")),
+            _ => panic!("expected Json"),
+        }
+    }
+
+    #[test]
+    fn json_wrong_arg_count_is_usage_error() {
+        assert!(parse_args(&args(&["json"])).is_err());
+        assert!(parse_args(&args(&["json", "a.tif", "extra"])).is_err());
+    }
+
+    #[test]
+    fn sweep_parses_with_its_json_flag() {
+        let cmd = parse_args(&args(&["sweep", "--json", "list.txt"])).unwrap();
+        match cmd {
+            Command::Sweep { list } => assert_eq!(list, PathBuf::from("list.txt")),
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn sweep_without_the_json_flag_is_a_usage_error() {
+        assert!(parse_args(&args(&["sweep", "list.txt"])).is_err());
+        assert!(parse_args(&args(&["sweep", "--yaml", "list.txt"])).is_err());
     }
 }

@@ -502,10 +502,11 @@ mod tests {
         verify_fixture_dir(&fixtures_dir(), "manifest.json");
 
         // Real Zeiss Axioscan JPEG-XR tiles: opt-in and NOT committed (derived from
-        // a 673 MB third-party sample). They are extracted from that sample into
-        // this folder by hand. When present, this proves the FFI decodes real
-        // Zeiss codestreams byte-exact (varied real tile sizes, not just imagecodecs
-        // synthetic streams), and skips cleanly otherwise so plain checkouts pass.
+        // a third-party sample). They are extracted from that sample into this
+        // folder by `tests/parity/extract_jxr_tiles.py`. When present, this proves
+        // the FFI decodes real Zeiss codestreams byte-exact (varied real tile
+        // sizes, not just imagecodecs synthetic streams), and skips cleanly
+        // otherwise so plain checkouts pass.
         // The gate is the shared one: absent and not required is a printed skip,
         // absent and required is a failure — the check can never go dark.
         let real =
