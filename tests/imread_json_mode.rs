@@ -317,10 +317,23 @@ fn a_missing_file_reports_an_error() {
     let record = record(&path);
     assert_eq!(record["status"], "error");
     assert_eq!(record["error"]["kind"], "io");
-    assert!(record["error"]["message"]
-        .as_str()
-        .expect("a message")
-        .contains("cannot find"));
+    // The wording of an I/O error is the operating system's, and every system
+    // words it differently: Windows says "The system cannot find the file
+    // specified", Linux says "No such file or directory", macOS says "No such
+    // file or directory" too. A check on that sentence is a check on the
+    // machine the test ran on, not on the record — so the record is checked
+    // by what it states: the failure is an I/O one, it has a message, and it
+    // is about the file that is missing.
+    let message = record["error"]["message"].as_str().expect("a message");
+    assert!(
+        !message.trim().is_empty(),
+        "the error carries a message: {message:?}"
+    );
+    let recorded = record["path"].as_str().expect("a path");
+    assert!(
+        recorded.contains("there-is-no-such-fixture.tif"),
+        "the record names the missing file: {recorded}"
+    );
     assert_eq!(record["scenes"].as_array().expect("scenes").len(), 0);
 }
 
