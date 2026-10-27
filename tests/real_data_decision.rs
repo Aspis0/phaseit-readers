@@ -6,6 +6,10 @@
 //! `PHASIT_REAL_DATA_REQUIRED=1` it fails loudly instead. These tests call
 //! the decision directly, so they never read or set an environment variable
 //! and can run in parallel with everything else.
+//!
+//! The one exception is the THIRD-PARTY sample `PHASIT_CZI_BGR_SAMPLE`
+//! names: it is not the owner's data and is not committed, so it skips
+//! whatever the required flag says.
 
 mod real_data;
 
@@ -328,26 +332,11 @@ fn reference_dump_from_gives_the_path_of_a_present_dump() {
     assert_eq!(decision, Decision::Found(present_file()));
 }
 
+/// The third-party sample is not the owner's data, so requiring the owner's
+/// data must not turn its absence into a failure: it skips.
 #[test]
-fn bgr_sample_from_fails_when_the_run_requires_a_missing_sample() {
-    let decision = bgr_sample_from(
-        Some(missing_sample().as_os_str()),
-        Some(OsStr::new("1")),
-    );
-    assert_eq!(
-        decision,
-        Decision::Required(format!(
-            "required real data missing: {NAMED_VAR} points at c_winnt.czi, which is not present"
-        ))
-    );
-}
-
-#[test]
-fn bgr_sample_from_skips_a_missing_sample_when_the_run_does_not_require_it() {
-    let decision = bgr_sample_from(
-        Some(missing_sample().as_os_str()),
-        Some(OsStr::new("0")),
-    );
+fn bgr_sample_from_skips_a_missing_sample_even_when_the_run_requires_the_real_data() {
+    let decision = bgr_sample_from(Some(missing_sample().as_os_str()));
     assert_eq!(
         decision,
         Decision::Skip(format!(
@@ -357,17 +346,14 @@ fn bgr_sample_from_skips_a_missing_sample_when_the_run_does_not_require_it() {
 }
 
 #[test]
-fn bgr_sample_from_gives_the_path_of_a_present_sample() {
-    let present = present_file();
-    let decision = bgr_sample_from(Some(present.as_os_str()), Some(OsStr::new("1")));
-    assert_eq!(decision, Decision::Found(present));
+fn bgr_sample_from_skips_an_unset_sample_even_when_the_run_requires_the_real_data() {
+    let decision = bgr_sample_from(None);
+    assert_eq!(decision, Decision::Skip(format!("{NAMED_VAR} is not set")));
 }
 
 #[test]
-fn bgr_sample_from_fails_when_the_run_requires_an_unset_sample() {
-    let decision = bgr_sample_from(None, Some(OsStr::new("1")));
-    assert_eq!(
-        decision,
-        Decision::Required(format!("required real data missing: {NAMED_VAR} is not set"))
-    );
+fn bgr_sample_from_gives_the_path_of_a_present_sample() {
+    let present = present_file();
+    let decision = bgr_sample_from(Some(present.as_os_str()));
+    assert_eq!(decision, Decision::Found(present));
 }

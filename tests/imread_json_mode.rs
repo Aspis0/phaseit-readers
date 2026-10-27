@@ -224,6 +224,39 @@ fn a_multiscene_fixture_states_every_scene() {
 }
 
 #[test]
+fn every_scene_carries_its_notes() {
+    // The field is always there, so a reader of the record never has to ask
+    // whether it is present. A fixture whose calibration the reader used
+    // says nothing.
+    for entry in manifest()["fixtures"].as_array().expect("fixtures") {
+        let file = entry["file"].as_str().expect("the fixture's name");
+        let record = fixture(file);
+        for scene in record["scenes"].as_array().expect("scenes") {
+            assert!(
+                scene["notes"].is_array(),
+                "{file}: every scene carries its notes"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_recorded_z_step_is_published_and_a_missing_one_is_null() {
+    // The hyperstack fixture states a Z step of 1.5 um; the two-series OME
+    // fixture states no Z step at all.
+    let hyperstack = fixture("imagej-hyperstack.tif");
+    assert_eq!(hyperstack["scenes"][0]["px_size_um"]["z"], 1.5);
+
+    let ome = fixture("two-series.ome.tif");
+    assert_eq!(
+        ome["scenes"][0]["px_size_um"]["z"],
+        Value::Null,
+        "a Z step the file does not record is null, not 0"
+    );
+    assert_eq!(ome["scenes"][0]["px_size_um"]["x"], 0.5);
+}
+
+#[test]
 fn every_fixture_plane_hashes_and_measures_as_its_bytes_state() {
     for entry in manifest()["fixtures"].as_array().expect("fixtures") {
         let file = entry["file"].as_str().expect("the fixture's name");

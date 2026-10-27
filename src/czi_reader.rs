@@ -19,6 +19,10 @@
 //! (a table of every pixel subblock) and the `ZISRAWMETADATA` (XML). We seek to
 //! those two, build the plane model from the directory, and read pixels lazily.
 //!
+//! **Size**: this file is longer than the 400-line target of the coder
+//! standard. The excess is pre-existing and DECLARED here, not refactored by
+//! the change that touched it.
+//!
 //! # Subblock pixel-data offset (byte-exact)
 //!
 //! A subblock's data (at `DirectoryEntryDV.FilePosition`, i.e. the
@@ -145,10 +149,11 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use ruzstd::decoding::StreamingDecoder;
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, PixelRect, Plane, PlaneBuf, PxSizeUm,
+    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, PixelRect, Plane, PlaneBuf,
     RefusedScene, SceneMeta,
 };
 
@@ -276,7 +281,7 @@ impl ImageReader for CziReader {
         let (dir_pos, meta_pos) = parse_file_header(buf)?;
 
         // --- best-effort metadata XML (never gates decoding) ---
-        let (channel_names, px_size_um) = parse_metadata(buf, meta_pos).unwrap_or_default();
+        let (channel_names, calibration) = parse_metadata(buf, meta_pos).unwrap_or_default();
 
         // --- subblock directory: enumerate every full-res tile ---
         let raw_entries = parse_directory(buf, dir_pos)?;
@@ -529,7 +534,8 @@ impl ImageReader for CziReader {
                 dims,
                 dtype,
                 samples,
-                px_size_um,
+                px_size_um: calibration.px_size_um,
+                notes: calibration.notes.clone(),
                 channels,
                 palette: None,
                 name: scene_name,
@@ -1559,23 +1565,23 @@ fn sorted_distinct<I: Iterator<Item = i32>>(iter: I) -> Vec<i32> {
 /// Parse the `MetadataSegment` XML for channel names (in order) and the X/Y/Z
 /// pixel size in micrometres. Best-effort: any failure yields defaults so it can
 /// never gate decoding.
-fn parse_metadata(buf: &[u8], meta_pos: usize) -> Result<(Vec<String>, Option<PxSizeUm>)> {
+fn parse_metadata(buf: &[u8], meta_pos: usize) -> Result<(Vec<String>, Calibration)> {
     if !segment_id_is(buf, meta_pos, b"ZISRAWMETADATA") {
-        return Ok((Vec::new(), None));
+        return Ok((Vec::new(), Calibration::default()));
     }
     let sd = meta_pos + SEGMENT_HEADER_LEN;
     let xml_size = nonneg_usize(rd_i32(buf, sd)?, "MetadataSize")?;
     if xml_size > MAX_XML_BYTES {
-        return Ok((Vec::new(), None));
+        return Ok((Vec::new(), Calibration::default()));
     }
     let start = sd + METADATA_FIXED;
     let end = match start.checked_add(xml_size).filter(|&e| e <= buf.len()) {
         Some(e) => e,
-        None => return Ok((Vec::new(), None)),
+        None => return Ok((Vec::new(), Calibration::default())),
     };
     let xml = match std::str::from_utf8(&buf[start..end]) {
         Ok(s) => s,
-        Err(_) => return Ok((Vec::new(), None)),
+        Err(_) => return Ok((Vec::new(), Calibration::default())),
     };
 
     let mut reader = Reader::from_str(xml);
@@ -1639,16 +1645,16 @@ fn parse_metadata(buf: &[u8], meta_pos: usize) -> Result<(Vec<String>, Option<Px
     }
 
     // Distances are in metres; convert to micrometres. Require X and Y.
-    let px_size_um = match (px_x, px_y) {
-        (Some(x), Some(y)) if x > 0.0 && y > 0.0 => Some(PxSizeUm {
-            z: px_z.filter(|&v| v > 0.0).map(|v| (v * 1e6) as f32).unwrap_or(0.0),
-            y: (y * 1e6) as f32,
-            x: (x * 1e6) as f32,
-        }),
-        _ => None,
+    let calibration = match (px_x, px_y) {
+        (Some(x), Some(y)) if x > 0.0 && y > 0.0 => Calibration::sized(
+            (x * 1e6) as f32,
+            (y * 1e6) as f32,
+            px_z.map(|v| (v * 1e6) as f32),
+        ),
+        _ => Calibration::default(),
     };
 
-    Ok((channel_names, px_size_um))
+    Ok((channel_names, calibration))
 }
 
 /// Parse a `<Value>` text node inside a `<Distance>` element into `(axis, value)`,

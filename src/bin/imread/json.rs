@@ -50,6 +50,27 @@ pub fn integer(value: usize) -> String {
     value.to_string()
 }
 
+/// A JSON number, or `null` when there is no number.
+///
+/// A measurement the file does not record is absent, not zero: `null` says
+/// "no value here", where a `0` would read as a measured zero.
+pub fn number_or_null(value: Option<f64>) -> String {
+    match value {
+        Some(value) => number(value),
+        None => "null".to_string(),
+    }
+}
+
+/// A JSON array of strings.
+pub fn string_array(values: &[String]) -> String {
+    let items = values
+        .iter()
+        .map(|value| string(value))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{items}]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +109,22 @@ mod tests {
         assert_eq!(number(f64::INFINITY), "null");
         assert_eq!(number(1.5), "1.5");
         assert_eq!(number(0.0), "0");
+    }
+
+    #[test]
+    fn a_missing_number_is_null() {
+        assert_eq!(number_or_null(None), "null");
+        assert_eq!(number_or_null(Some(1.5)), "1.5");
+        assert_eq!(number_or_null(Some(0.0)), "0");
+    }
+
+    #[test]
+    fn a_string_array_is_a_json_array() {
+        assert_eq!(string_array(&[]), "[]");
+        assert_eq!(string_array(&["a".to_string()]), "[\"a\"]");
+        assert_eq!(
+            string_array(&["a".to_string(), "b\"c".to_string()]),
+            "[\"a\",\"b\\\"c\"]"
+        );
     }
 }

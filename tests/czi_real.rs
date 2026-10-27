@@ -125,8 +125,12 @@ fn czi_stitched_geometry_and_plane() {
 #[test]
 fn czi_bgr24_color_geometry_and_plane() {
     // Real uncompressed Bgr24 sample (Zeiss/Bio-Formats `c_winnt.czi`, 275x174,
-    // single subblock). Third-party — NOT committed; gated behind an env var so
-    // the test skips cleanly when unset (mirrors the other real-file gates).
+    // single subblock). Third-party — NOT committed, and NOT part of the
+    // owner's real-data folder, so it is an OPTIONAL extra: it skips when the
+    // variable is unset, even in a run that requires the real data (that flag
+    // governs the owner's files, not a third-party sample). The colour
+    // contract itself is checked on a committed synthetic fixture — see
+    // `czi_bgr24_synthetic.rs`.
     let Some(path) = bgr_sample() else {
         return;
     };

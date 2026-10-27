@@ -133,7 +133,7 @@ fn scene_json(index: usize, file_index: usize, scene: &SceneMeta) -> String {
     let px_size = match scene.px_size_um {
         Some(px) => format!(
             "{{\"z\":{},\"y\":{},\"x\":{}}}",
-            json::number(px.z as f64),
+            json::number_or_null(px.z.map(|z| z as f64)),
             json::number(px.y as f64),
             json::number(px.x as f64)
         ),
@@ -143,7 +143,7 @@ fn scene_json(index: usize, file_index: usize, scene: &SceneMeta) -> String {
     format!(
         "{{\"index\":{},\"name\":{},\"file_index\":{},\
          \"dims\":{{\"t\":{},\"c\":{},\"z\":{},\"y\":{},\"x\":{}}},\
-         \"dtype\":\"{:?}\",\"samples\":{},\"px_size_um\":{},\"channels\":[{}]}}",
+         \"dtype\":\"{:?}\",\"samples\":{},\"px_size_um\":{},\"notes\":{},\"channels\":[{}]}}",
         json::integer(index),
         json::string(&scene.name),
         json::integer(file_index),
@@ -155,6 +155,7 @@ fn scene_json(index: usize, file_index: usize, scene: &SceneMeta) -> String {
         scene.dtype,
         json::integer(scene.samples as usize),
         px_size,
+        json::string_array(&scene.notes),
         channels.join(","),
     )
 }

@@ -44,7 +44,12 @@ rest rather than guess:
   frame. The refused image keeps its place in the file's own list of images,
   so the images after it are not renumbered; the open fails only when no image
   of the file can be read at all, and then the error names every refusal with
-  its own reason.
+  its own reason. A `.lifext` companion next to the `.lif` holds the children
+  of the `.lif`'s own images — their histograms (`*_histo`) and their reduced
+  pyramid levels (`*_pmd_N`) — which are auxiliary data of those images and not
+  scenes of their own, so they are deliberately neither published nor listed as
+  refused, the same as Bio-Formats, which opens the `.lif` and publishes its
+  images only.
 - **CZI** — uncompressed, Zstd0 and Zstd1 subblocks. JpgFile (1) and LZW (2)
   are refused. JPEG-XR (4) is refused unless the crate is built with
   `--features jpegxr`, which needs a C toolchain (MSVC on Windows, gcc or

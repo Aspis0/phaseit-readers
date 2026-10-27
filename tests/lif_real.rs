@@ -27,6 +27,8 @@ use real_data::{real_file, reference_dump};
 #[cfg(feature = "ndarray")]
 const SAMPLE_CTRL: &str = "lif/control.lif";
 const SAMPLE_MULTI: &str = "lif/four-scene.lif";
+/// The companion of `SAMPLE_MULTI`: the same dataset's auxiliary data.
+const SAMPLE_MULTI_COMPANION: &str = "lif/four-scene.lifext";
 
 #[test]
 fn lif_geometry_and_out_of_range() {
@@ -77,6 +79,40 @@ fn lif_geometry_and_out_of_range() {
         reader.plane(99, 0, 0, 0),
         Err(Error::SceneOutOfRange { scene: 99, .. })
     ));
+}
+
+/// The `.lifext` companion next to a `.lif` holds the CHILDREN of the `.lif`'s
+/// own images — their histograms and their reduced pyramid levels. Those are
+/// auxiliary data OF the images the `.lif` publishes, not scenes of their own:
+/// the reader publishes the `.lif`'s own images and refuses nothing for the
+/// companion, so the desktop's scene chooser is not flooded with rows that are
+/// not scenes. Bio-Formats does the same — it opens the `.lif` and publishes
+/// the `.lif`'s images only.
+///
+/// The test says what the reader does WHILE the companion sits next to the
+/// `.lif`: four scenes, and no refusal for the companion's children. Both
+/// files are looked up through the real-data helpers, so a run that requires
+/// the real data fails loudly when either is missing.
+#[test]
+fn the_companion_holds_auxiliary_data_and_no_scene() {
+    let Some(path) = real_file(SAMPLE_MULTI) else {
+        return;
+    };
+    let Some(_companion) = real_file(SAMPLE_MULTI_COMPANION) else {
+        return;
+    };
+
+    let reader = LifReader::open(&path).expect("open LIF");
+    assert_eq!(
+        reader.meta().scene_count(),
+        4,
+        "the `.lif`'s own images are published, the companion's children are not"
+    );
+    assert_eq!(
+        reader.refused_scenes().len(),
+        0,
+        "the companion's children are auxiliary data, not refused scenes"
+    );
 }
 
 /// Bit-exact parity: every non-ext LIF `_ref` plane must equal our decoded

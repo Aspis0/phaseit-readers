@@ -53,6 +53,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::lsm_bytes::{read_u16, read_u32, read_u8};
@@ -60,7 +61,7 @@ use crate::lsm_channel_colors::read_channel_meta;
 use crate::lsm_cz_info::{self, CzTag};
 use crate::lsm_positions::{build_scenes, LsmLayout};
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, PxSizeUm,
+    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf,
 };
 
 /// Private LSM tag carrying the `CZ-LSM-Info` geometry/calibration struct.
@@ -144,7 +145,7 @@ impl ImageReader for LsmReader {
             &parsed.layout,
             dims,
             parsed.dtype,
-            parsed.px_size_um,
+            parsed.calibration,
             channels,
         );
 
@@ -254,7 +255,7 @@ struct ParsedLsm {
     y: usize,
     x: usize,
     strips_per_channel: usize,
-    px_size_um: Option<PxSizeUm>,
+    calibration: Calibration,
     /// The tile/position layout: how many scenes the file holds and which
     /// real page each scene's planes live on.
     layout: LsmLayout,
@@ -465,7 +466,7 @@ fn parse_lsm(buf: &[u8]) -> Result<ParsedLsm> {
         y,
         x,
         strips_per_channel,
-        px_size_um: geo.px_size_um,
+        calibration: geo.calibration,
         layout,
         channel_colors_offset: geo.channel_colors_offset,
         real_pages,

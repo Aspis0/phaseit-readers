@@ -25,7 +25,7 @@
 //! is plausible on one axis and absurd on the other states a number no
 //! microscope measured.
 
-use crate::types::PxSizeUm;
+use crate::calibration::Calibration;
 
 /// The smallest pixel size light microscopy could have measured, in µm.
 const MIN_PLAUSIBLE_UM: f64 = 0.001;
@@ -43,24 +43,33 @@ const RESOLUTION_UNIT_CENTIMETER: u16 = 3;
 /// The micrometres one centimetre is worth.
 const MICROMETERS_PER_CENTIMETER: f64 = 10_000.0;
 
-/// The pixel size a plain TIFF states about itself, in micrometres.
+/// The pixel size a plain TIFF states about itself, in micrometres, and the
+/// notes on the calibration it could not use.
 ///
 /// `description` is the ImageJ description (tag 270); `x_per_unit` and
 /// `y_per_unit` are the pixels-per-unit counts the XResolution/YResolution
 /// rationals (tags 282/283) state; `resolution_unit` is the ResolutionUnit
 /// tag (296).
 ///
-/// `None` means the file states no pixel size: an uncalibrated file stays
-/// uncalibrated, and no default micrometre value is invented for it.
+/// A `px_size_um` of `None` means the file states no pixel size: an
+/// uncalibrated file stays uncalibrated, and no default micrometre value is
+/// invented for it.
+///
+/// Only ONE of the refusals says anything: an INCH resolution is named by
+/// [`print_resolution_note`], because a print layout is a statement about the
+/// file worth passing on. The other refusals — no resolution at all, a
+/// stated-but-unusable count, no absolute unit, an unknown unit code, and a
+/// size no microscope measured — publish no pixel size and NO note: they say
+/// nothing about the file, and a note for each would be noise.
 pub fn calibration_from_tags(
     description: Option<&str>,
     x_per_unit: Option<f64>,
     y_per_unit: Option<f64>,
     resolution_unit: Option<u16>,
-) -> Option<PxSizeUm> {
+) -> Calibration {
     let description = description.and_then(imagej_description);
     if x_per_unit.is_none() && y_per_unit.is_none() {
-        return None;
+        return Calibration::default();
     }
 
     // A stated-but-unusable count (0, negative, non-finite) is an ABSURD
@@ -69,7 +78,7 @@ pub fn calibration_from_tags(
     // by the other axis' value.
     let unusable = |count: Option<f64>| matches!(count, Some(v) if !(v.is_finite() && v > 0.0));
     if unusable(x_per_unit) || unusable(y_per_unit) {
-        return None;
+        return Calibration::default();
     }
 
     // The unit the resolution is counted in. The description names it ONLY
@@ -77,15 +86,23 @@ pub fn calibration_from_tags(
     // unit is the file's own statement of what the resolution counts, and
     // the description does not overrule it.
     let micrometers_per_unit = match resolution_unit {
-        // An inch resolution is the size a picture is laid out at on paper.
-        Some(RESOLUTION_UNIT_INCH) => return None,
+        // An inch resolution is the size a picture is laid out at on paper,
+        // not a microscope's pixel size. Say which, and publish no pixel
+        // size: a print layout is not a distance between two pixels.
+        Some(RESOLUTION_UNIT_INCH) => {
+            let dpi = x_per_unit.or(y_per_unit).unwrap_or_default();
+            return Calibration::uncalibrated(vec![print_resolution_note(dpi)]);
+        }
         Some(RESOLUTION_UNIT_CENTIMETER) => MICROMETERS_PER_CENTIMETER,
         Some(RESOLUTION_UNIT_NONE) | None => {
             // No absolute unit anywhere: the file states no pixel size.
-            description.as_ref()?.micrometers_per_unit
+            match description.as_ref() {
+                Some(description) => description.micrometers_per_unit,
+                None => return Calibration::default(),
+            }
         }
         // An unknown unit code names no absolute unit either.
-        Some(_) => return None,
+        Some(_) => return Calibration::default(),
     };
 
     // The resolution counts pixels per unit, so the pixel size is the unit's
@@ -97,24 +114,35 @@ pub fn calibration_from_tags(
         // One axis without a resolution takes the other axis' value.
         (Some(x), None) => (x, x),
         (None, Some(y)) => (y, y),
-        (None, None) => return None,
+        (None, None) => return Calibration::default(),
     };
 
     if !is_plausible_um(x) || !is_plausible_um(y) {
-        return None;
+        return Calibration::default();
     }
 
-    Some(PxSizeUm {
-        x: x as f32,
-        y: y as f32,
+    Calibration::sized(
+        x as f32,
+        y as f32,
         // The description's spacing is the Z step. Without one the step is
-        // unknown: 0.0 is this crate's "not recorded" marker (the ND2/CZI/LIF
-        // readers use it, and the OME-N layer treats <= 0 as unrecorded), so
-        // a step the file never declared is never published.
-        z: description
+        // unknown, and the shared rule publishes it as `None` — the file
+        // records no Z step — never as a number the reader invented.
+        description
             .and_then(|description| description.spacing_um)
-            .unwrap_or(0.0) as f32,
-    })
+            .map(|um| um as f32),
+    )
+}
+
+/// The note an INCH resolution earns: the file's resolution is a print
+/// layout, not a microscope's pixel size.
+///
+/// The wording lives here, once, so that a caller describing the same
+/// resolution the same way — a wire, a report, a test — says the same thing
+/// as the reader.
+pub fn print_resolution_note(dpi: f64) -> String {
+    format!(
+        "the file states a print resolution of {dpi} dpi; it is not a microscope pixel size and was not used"
+    )
 }
 
 /// The micrometres one unit of a resolution is worth, per the unit's name.

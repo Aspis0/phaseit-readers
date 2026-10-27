@@ -6,9 +6,10 @@
 *.raw -text
 *.tif -text
 *.jxr -text
+*.czi -text
 
 # Everything under tests/fixtures/ is test input, not source. The data files
-# are the four binary extensions above and stay byte for byte; the manifests
+# are the five binary extensions above and stay byte for byte; the manifests
 # and the generators beside them are text, and are kept with LF line endings
 # on every platform, so that a fixture means the same thing everywhere: the
 # generators write the manifests in text mode, which on Windows means CRLF,

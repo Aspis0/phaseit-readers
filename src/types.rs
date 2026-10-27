@@ -8,6 +8,10 @@
 //! Buffers handed to callers are always **owned** and **native-endian**: raw
 //! on-disk bytes (which may be big-endian, e.g. `MM` TIFF/LSM) are byteswapped
 //! at decode time by [`PlaneBuf::from_bytes`].
+//!
+//! **Size**: this file is longer than the 400-line target of the coder
+//! standard. The excess is pre-existing and DECLARED here, not refactored by
+//! the change that touched it.
 
 use crate::error::{Error, Result};
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
@@ -509,7 +513,12 @@ pub struct ChannelMeta {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PxSizeUm {
     /// Spacing between focal planes (Z) in micrometres.
-    pub z: f32,
+    ///
+    /// `None` means the file records no Z step — either it states none, or it
+    /// states a number that is not a distance a microscope measured. It is
+    /// never a number the reader invented, and never `Some(0.0)`: see
+    /// [`crate::calibration`], the one rule every reader applies.
+    pub z: Option<f32>,
     /// Vertical pixel size (Y) in micrometres.
     pub y: f32,
     /// Horizontal pixel size (X) in micrometres.
@@ -542,6 +551,12 @@ pub struct SceneMeta {
     /// Physical pixel size in micrometres. `None` when the format does not
     /// record calibration.
     pub px_size_um: Option<PxSizeUm>,
+    /// Notes on the calibration the file stated but the reader could not use.
+    ///
+    /// Human-readable sentences: no file path, no pixel value. Empty when the
+    /// reader used everything the file stated — a scene with no calibration
+    /// problem has nothing to say.
+    pub notes: Vec<String>,
     /// Per-channel metadata (length should equal `dims.c`).
     pub channels: Vec<ChannelMeta>,
     /// The colour palette of an INDEXED scene: `palette[i]` is the RGB colour
@@ -921,6 +936,7 @@ mod tests {
                 dtype: DType::U8,
                 samples,
                 px_size_um: None,
+                notes: Vec::new(),
                 channels: vec![ChannelMeta::default()],
                 palette: None,
                 name: "fake".to_string(),
