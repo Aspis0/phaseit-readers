@@ -224,7 +224,7 @@ pub(crate) fn infer_plain(
     // while the decoder is still on IFD 0 — the same condition as w/h above.
     // Calibration is best-effort metadata: a missing or unreadable tag leaves
     // the file uncalibrated and never fails open().
-    let px_size_um = tiff_calibration::calibration_from_tags(
+    let calibration = tiff_calibration::calibration_from_tags(
         description,
         resolution_per_unit(dec, Tag::XResolution),
         resolution_per_unit(dec, Tag::YResolution),
@@ -276,7 +276,8 @@ pub(crate) fn infer_plain(
         // The samples of a pixel stay together in the plane (see the reader's
         // module docs): an RGB page is one channel of three components.
         samples: colour.samples as u32,
-        px_size_um,
+        px_size_um: calibration.px_size_um,
+        notes: calibration.notes,
         channels: channels_meta,
         palette: colour.palette,
         name: String::new(), // filled in by the reader

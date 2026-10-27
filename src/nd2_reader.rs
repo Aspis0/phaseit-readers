@@ -58,10 +58,11 @@ use std::path::Path;
 use flate2::read::ZlibDecoder;
 use memmap2::Mmap;
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, PxSizeUm, SceneMeta,
+    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, SceneMeta,
 };
 
 // --- container constants ------------------------------------------------------
@@ -1079,11 +1080,9 @@ impl ImageReader for Nd2Reader {
         // --- best-effort metadata (never gates open) ---
         let cal_um = parse_calibration_um(buf, &map);
         let z_step_um = find_z_step(exp, 0);
-        let px_size_um = cal_um.map(|c| PxSizeUm {
-            z: z_step_um.unwrap_or(0.0) as f32,
-            y: c as f32,
-            x: c as f32,
-        });
+        let calibration = cal_um
+            .map(|c| Calibration::sized(c as f32, c as f32, z_step_um.map(|v| v as f32)))
+            .unwrap_or_default();
         let channels = parse_channels(buf, &map, attrs.comp);
         let stem = file_stem(path);
 
@@ -1092,7 +1091,8 @@ impl ImageReader for Nd2Reader {
                 dims,
                 dtype: attrs.dtype,
                 samples: 1,
-                px_size_um,
+                px_size_um: calibration.px_size_um,
+                notes: calibration.notes.clone(),
                 channels: channels.clone(),
                 palette: None,
                 name: if scenes == 1 {

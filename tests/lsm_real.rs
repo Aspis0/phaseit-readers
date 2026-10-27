@@ -84,7 +84,11 @@ fn lsm_geometry_and_out_of_range() {
 
     // Calibration from CZ-LSM-Info (best-effort): ~0.0659 µm XY, 0.5 µm Z.
     let px = scene.px_size_um.expect("LSM has voxel calibration");
-    assert!((px.z - 0.5).abs() < 1e-3, "z px = {}", px.z);
+    assert!(
+        (px.z.expect("the Z step") - 0.5).abs() < 1e-3,
+        "z px = {:?}",
+        px.z
+    );
     assert!((px.x - 0.0659).abs() < 1e-3, "x px = {}", px.x);
 
     // A valid plane has the right shape and dtype.
@@ -165,6 +169,32 @@ fn lsm_tile_scan_publishes_one_scene_per_tile() {
         reader.plane(49, 0, 0, 0),
         Err(Error::OutOfRange { scene: 49, .. })
     ));
+}
+
+/// The tile scan's CZ-LSM-Info states 1e-19 m for its Z step: a placeholder
+/// in the place of a distance between two focal planes, not a step. The scene
+/// publishes the X/Y size the file really states and says why it has no Z
+/// step.
+#[test]
+fn a_real_lsm_with_a_placeholder_z_step_says_so() {
+    let Some(path) = real_file(TILE_SCAN) else {
+        return;
+    };
+
+    let reader = LsmReader::open(&path).expect("open the tile scan");
+    let scene = reader.meta().scene(0).expect("the first tile");
+    let px = scene.px_size_um.expect("the tile scan states a pixel size");
+    assert_eq!(px.z, None, "the placeholder is not a step");
+    assert!(
+        px.x > 0.0 && px.y > 0.0,
+        "the X/Y size the file states is still published"
+    );
+    assert_eq!(
+        scene.notes,
+        vec![phasit_imread::calibration::z_step_note(1e-13)
+            .expect("a placeholder earns a note")],
+        "the note names the placeholder the file stated"
+    );
 }
 
 /// Bit-exact parity: every LSM `_ref` plane must equal our decoded plane,

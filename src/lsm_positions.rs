@@ -17,8 +17,9 @@
 //! This module also builds the scene vector the reader publishes: one scene
 //! per acquisition, each with the file's own geometry and channels.
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
-use crate::types::{ChannelMeta, DType, Dims5, PxSizeUm, SceneMeta};
+use crate::types::{ChannelMeta, DType, Dims5, SceneMeta};
 
 /// The tile/position layout of one LSM file.
 ///
@@ -90,7 +91,7 @@ pub fn build_scenes(
     layout: &LsmLayout,
     dims: Dims5,
     dtype: DType,
-    px_size_um: Option<PxSizeUm>,
+    calibration: Calibration,
     channels: Vec<ChannelMeta>,
 ) -> Vec<SceneMeta> {
     let scene_count = layout.scene_count();
@@ -99,7 +100,8 @@ pub fn build_scenes(
             dims,
             dtype,
             samples: 1, // LSM planes are grayscale (one sample per pixel).
-            px_size_um,
+            px_size_um: calibration.px_size_um,
+            notes: calibration.notes.clone(),
             channels: channels.clone(),
             palette: None,
             name: if scene_count == 1 {

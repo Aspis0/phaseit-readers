@@ -25,18 +25,18 @@
 //! # }
 //! ```
 
+pub mod calibration;
+pub mod czi_reader;
 pub mod detect;
 pub mod error;
 pub mod guard;
 pub(crate) mod io;
-pub mod types;
-
-pub mod czi_reader;
 pub mod lif_reader;
 pub mod lsm_reader;
 pub mod nd2_reader;
 pub mod tiff_calibration;
 pub mod tiff_reader;
+pub mod types;
 
 mod lsm_bytes;
 mod lsm_channel_colors;

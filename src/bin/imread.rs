@@ -171,9 +171,19 @@ fn run_info(path: &Path) -> ImreadResult<()> {
 
         match scene.px_size_um {
             Some(px) => {
-                println!("    px size: z={:.4} y={:.4} x={:.4} um", px.z, px.y, px.x)
+                let z = match px.z {
+                    Some(z) => format!("{z:.4}"),
+                    None => "not recorded".to_string(),
+                };
+                println!("    px size: z={z} y={:.4} x={:.4} um", px.y, px.x)
             }
             None => println!("    px size: (none)"),
+        }
+
+        // What the reader could not use of the file's calibration, said out
+        // loud: a scene with no calibration problem has nothing to say.
+        for note in &scene.notes {
+            println!("    note:    {note}");
         }
     }
 

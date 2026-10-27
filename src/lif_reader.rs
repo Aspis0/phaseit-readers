@@ -54,11 +54,12 @@ use memmap2::Mmap;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, PxSizeUm,
-    RefusedScene, SceneMeta,
+    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, RefusedScene,
+    SceneMeta,
 };
 
 /// LIF `DimID` values we map to canonical axes. Anything else (emission λ,
@@ -159,6 +160,22 @@ impl ImageReader for LifReader {
         // companion is there: a `.lif` whose block is simply missing is not
         // ext-resident, it is short.
         let has_companion = path.with_extension("lifext").exists();
+
+        // WHY the companion is not read, and why its images are not listed:
+        // a `.lifext` holds the CHILDREN of the `.lif`'s own images - their
+        // histograms (`*_histo`) and their reduced pyramid levels (`*_pmd_N`).
+        // Those are auxiliary data OF the images the `.lif` publishes, not
+        // images a user would open, so they are deliberately neither published
+        // as scenes nor listed as refused. Bio-Formats does the same: it
+        // opens the `.lif` and publishes the `.lif`'s images only, and does
+        // not publish the companion's. Listing them as refused would flood
+        // the desktop's scene chooser with rows that are not scenes - twelve
+        // for four-scene.lif, two hundred and nine over the corpus.
+        //
+        // Later on, the `*_pmd_N` levels could speed up the desktop pyramid:
+        // they are reduced copies of the very images the `.lif` publishes, so
+        // the small level could be read first instead of the full one. No
+        // code for that is in this reader yet.
 
         // --- build one scene per readable image ---
         let mut scenes: Vec<SceneMeta> = Vec::new();
@@ -582,13 +599,14 @@ fn build_scene(
         })
         .collect();
 
-    let px_size_um = pixel_size_um(&x, &y, z.as_ref());
+    let calibration = calibration(&x, &y, z.as_ref());
 
     let scene = SceneMeta {
         dims,
         dtype,
         samples: 1, // LIF planes are grayscale (one sample per pixel).
-        px_size_um,
+        px_size_um: calibration.px_size_um,
+        notes: calibration.notes,
         channels,
         palette: None,
         name,
@@ -637,8 +655,11 @@ fn dtype_from_channel(data_type: u32, resolution: u32) -> Result<DType> {
 
 /// Best-effort per-axis pixel spacing in micrometres, mirroring liffile's
 /// `coords` (linspace over `Length` metres): `spacing = Length / (N-1)`.
-/// Returns `Some` only when X and Y are both derivable; Z falls back to 0.
-fn pixel_size_um(x: &ParsedDim, y: &ParsedDim, z: Option<&ParsedDim>) -> Option<PxSizeUm> {
+/// A pixel size exists only when X and Y are both derivable; the Z step is
+/// resolved by the shared rule, so a file that states no Z step (or states a
+/// placeholder) publishes `None` for it, with a note when the file stated a
+/// placeholder.
+fn calibration(x: &ParsedDim, y: &ParsedDim, z: Option<&ParsedDim>) -> Calibration {
     let spacing_um = |d: &ParsedDim| -> Option<f32> {
         if d.n > 1 && d.length > 0.0 {
             Some((d.length / (d.n as f64 - 1.0) * 1e6) as f32)
@@ -647,12 +668,8 @@ fn pixel_size_um(x: &ParsedDim, y: &ParsedDim, z: Option<&ParsedDim>) -> Option<
         }
     };
     match (spacing_um(x), spacing_um(y)) {
-        (Some(px), Some(py)) => Some(PxSizeUm {
-            z: z.and_then(spacing_um).unwrap_or(0.0),
-            y: py,
-            x: px,
-        }),
-        _ => None,
+        (Some(px), Some(py)) => Calibration::sized(px, py, z.and_then(spacing_um)),
+        _ => Calibration::default(),
     }
 }
 

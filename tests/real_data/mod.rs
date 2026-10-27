@@ -18,6 +18,14 @@
 //! the data, `1` (or `true`) means it does. Anything else is a typo, and a
 //! typo must not fail open: it panics.
 //!
+//! The flag governs the OWNER's data — the folder `PHASIT_REAL_DATA_DIR`
+//! names. A THIRD-PARTY sample that lives outside that folder (the
+//! `PHASIT_CZI_BGR_SAMPLE` Bgr24 CZI) is not the owner's data and is not
+//! committed, so it may only ever be found or skipped: asking for the owner's
+//! data must not fail a run over a file the owner never had. What that
+//! sample used to gate is checked on a committed synthetic fixture instead
+//! (see `tests/czi_bgr24_synthetic.rs`).
+//!
 //! The decision itself is pure: it takes the folder, the flag and whether the
 //! file is there as arguments and never reads the environment. The `*_from`
 //! functions take the raw environment values and make that decision, so a
@@ -160,14 +168,15 @@ pub fn reference_dump(path: &Path) -> Option<PathBuf> {
     ))
 }
 
-/// The third-party Bgr24 CZI sample `PHASIT_CZI_BGR_SAMPLE` names, when it is there.
+/// The third-party Bgr24 CZI sample `PHASIT_CZI_BGR_SAMPLE` names, when it
+/// is there.
 ///
-/// `None` means the test must skip: the variable is unset, or the file is not there.
+/// `None` means the test must skip: the variable is unset, or the file is not
+/// there. This sample is a third-party extra — it is not committed and it is
+/// not the owner's data — so it skips even in a run that requires the real
+/// data.
 pub fn bgr_sample() -> Option<PathBuf> {
-    resolve(bgr_sample_from(
-        std::env::var_os(BGR_SAMPLE_VAR).as_deref(),
-        std::env::var_os(REAL_DATA_REQUIRED_VAR).as_deref(),
-    ))
+    resolve(bgr_sample_from(std::env::var_os(BGR_SAMPLE_VAR).as_deref()))
 }
 
 /// The decision for the real file at `relative` inside the real-data folder.
@@ -202,18 +211,23 @@ pub fn reference_dump_from(required: Option<&OsStr>, path: &Path) -> Decision {
 
 /// The decision for the third-party sample `PHASIT_CZI_BGR_SAMPLE` names.
 ///
-/// `sample` is the raw value of that variable and `required` the raw value of
-/// `PHASIT_REAL_DATA_REQUIRED`; the sample's presence is looked up here. No
-/// environment is read.
-pub fn bgr_sample_from(sample: Option<&OsStr>, required: Option<&OsStr>) -> Decision {
+/// `sample` is the raw value of that variable. The sample is a THIRD-PARTY
+/// extra: it is not committed, and it is not the owner's data, so
+/// `PHASIT_REAL_DATA_REQUIRED` (which governs the owner's data) does not
+/// apply to it. The decision is therefore found-or-skip, never required: a
+/// run that requires the owner's data must not fail over a file the owner
+/// never had. No environment is read.
+pub fn bgr_sample_from(sample: Option<&OsStr>) -> Decision {
     let path = sample.map(PathBuf::from);
     let exists = path.as_ref().is_some_and(|p| p.exists());
-    decide_named_file(
-        parse_required(required),
-        BGR_SAMPLE_VAR,
-        path.as_deref(),
-        exists,
-    )
+    match path {
+        None => Decision::Skip(format!("{BGR_SAMPLE_VAR} is not set")),
+        Some(path) if !exists => Decision::Skip(format!(
+            "{BGR_SAMPLE_VAR} points at {}, which is not present",
+            file_name(&path)
+        )),
+        Some(path) => Decision::Found(path),
+    }
 }
 
 /// The name of a file without the folders that lead to it.

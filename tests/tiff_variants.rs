@@ -181,7 +181,7 @@ fn every_fixture_reads_exactly_as_its_manifest_says() {
                 "{file}: pixel size y"
             );
             assert!(
-                (published.z as f64 - want("z")).abs() < 1e-4,
+                (published.z.expect("the Z step") as f64 - want("z")).abs() < 1e-4,
                 "{file}: pixel size z"
             );
         }

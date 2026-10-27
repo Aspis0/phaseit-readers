@@ -10,13 +10,14 @@
 //! disagrees with the page it describes, is refused with the reason named.
 //! Nothing here reads pixels.
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::tiff_calibration::micrometers_per_unit;
 use crate::tiff_ome::Pixels;
 use crate::tiff_ome_planes::{parse_dim_order, Axis};
 use crate::tiff_page::PageFacts;
 use crate::tiff_tags;
-use crate::types::{ChannelMeta, DType, Dims5, PxSizeUm, SceneMeta};
+use crate::types::{ChannelMeta, DType, Dims5, SceneMeta};
 
 /// The scene a `<Pixels>` describes, and the order its planes are stored in.
 pub(crate) struct SceneGeometry {
@@ -40,6 +41,7 @@ pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneG
     let samples = samples_of_page(page)?;
     let (channels, sc) = scene_channels(pixels, samples, sc)?;
 
+    let calibration = scene_calibration(pixels);
     let meta = SceneMeta {
         dims: Dims5 {
             t: st,
@@ -50,7 +52,8 @@ pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneG
         },
         dtype,
         samples: samples as u32,
-        px_size_um: scene_calibration(pixels),
+        px_size_um: calibration.px_size_um,
+        notes: calibration.notes,
         channels,
         palette: None,
         name: pixels.name.clone().unwrap_or_default(),
@@ -217,18 +220,19 @@ fn scene_channels(
 /// A PhysicalSize converts from its declared unit (the spec default is the
 /// micrometre when the Unit attribute is absent). A unit the table cannot read
 /// names no scale, so the size is not published rather than silently read as
-/// micrometres. A Z step the file does not record stays "not recorded" (0.0),
-/// the convention every reader in this crate and the plain-TIFF path use.
-fn scene_calibration(pixels: &Pixels) -> Option<PxSizeUm> {
+/// micrometres. A Z step the file does not record stays "not recorded"
+/// (`None`), the convention every reader in this crate and the plain-TIFF
+/// path use; a placeholder in its place is not a step either.
+fn scene_calibration(pixels: &Pixels) -> Calibration {
     match (
         physical_size_um(pixels.px_x, pixels.px_x_unit.as_deref()),
         physical_size_um(pixels.px_y, pixels.px_y_unit.as_deref()),
     ) {
-        (Some(x), Some(y)) => Some(PxSizeUm {
-            z: physical_size_um(pixels.px_z, pixels.px_z_unit.as_deref()).unwrap_or(0.0),
-            y,
+        (Some(x), Some(y)) => Calibration::sized(
             x,
-        }),
-        _ => None,
+            y,
+            physical_size_um(pixels.px_z, pixels.px_z_unit.as_deref()),
+        ),
+        _ => Calibration::default(),
     }
 }

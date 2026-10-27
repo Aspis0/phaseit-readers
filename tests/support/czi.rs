@@ -16,8 +16,8 @@ use super::scratch::Scratch;
 pub struct Tile {
     /// The scene (`S`) the tile belongs to.
     pub scene: i32,
-    /// The CZI `PixelType` id: 0 = Gray8, 1 = Gray16, 10 = Gray32 (not
-    /// modelled by the reader).
+    /// The CZI `PixelType` id: 0 = Gray8, 1 = Gray16, 3 = Bgr24 (colour),
+    /// 10 = Gray32 (not modelled by the reader).
     pub pixel_type: i32,
     /// The tile's size in pixels.
     pub width: u32,
@@ -26,6 +26,12 @@ pub struct Tile {
     /// The tile's STORED size, when it differs from its size: a sub-sampled
     /// (pyramid) tile. `None` means full resolution.
     pub stored: Option<(u32, u32)>,
+    /// The samples per pixel the tile's pixel type carries (1 = grayscale,
+    /// 3 = colour).
+    pub samples: u32,
+    /// The tile's pixel bytes, when the test states them. `None` fills the
+    /// tile with a constant.
+    pub pixels: Option<Vec<u8>>,
 }
 
 impl Tile {
@@ -37,6 +43,8 @@ impl Tile {
             width,
             height,
             stored: None,
+            samples: samples_of(pixel_type),
+            pixels: None,
         }
     }
 
@@ -49,6 +57,29 @@ impl Tile {
             width,
             height,
             stored: Some((width / 2, height / 2)),
+            samples: samples_of(pixel_type),
+            pixels: None,
+        }
+    }
+
+    /// A tile whose pixels the test states, in the order the FILE stores them
+    /// (BGR for a Bgr24 tile — the reader swaps B and R on the way out, so
+    /// the file's order is what a fixture has to state).
+    pub fn with_pixels(
+        scene: i32,
+        pixel_type: i32,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+    ) -> Tile {
+        Tile {
+            scene,
+            pixel_type,
+            width,
+            height,
+            stored: None,
+            samples: samples_of(pixel_type),
+            pixels: Some(pixels),
         }
     }
 
@@ -63,11 +94,18 @@ impl Tile {
     }
 }
 
-/// Bytes one sample of the tile's pixel type takes.
+/// Bytes ONE SAMPLE of the tile's pixel type takes.
 fn item_size(pixel_type: i32) -> usize {
     match pixel_type {
-        0 => 1,
-        1 => 2,
+        1 | 4 => 2, // Gray16, Bgr48
+        _ => 1,     // Gray8, Bgr24, and the types the reader does not model
+    }
+}
+
+/// The samples per pixel the tile's pixel type carries.
+fn samples_of(pixel_type: i32) -> u32 {
+    match pixel_type {
+        3 | 4 => 3, // Bgr24, Bgr48
         _ => 1,
     }
 }
@@ -137,7 +175,10 @@ pub fn write_czi(path: &Path, tiles: &[Tile]) {
     let tile_bytes: Vec<usize> = tiles
         .iter()
         .map(|t| {
-            t.stored_x() as usize * t.stored_y() as usize * item_size(t.pixel_type)
+            t.stored_x() as usize
+                * t.stored_y() as usize
+                * t.samples as usize
+                * item_size(t.pixel_type)
         })
         .collect();
 
@@ -184,7 +225,17 @@ pub fn write_czi(path: &Path, tiles: &[Tile]) {
         buf.extend_from_slice(&(*size as i64).to_le_bytes()); // DataSize
         buf.extend_from_slice(&directory_entry(tile, 0));
         buf.resize(data_start + SUBBLOCK_FIXED, 0);
-        buf.extend(std::iter::repeat_n(0x5au8, *size));
+        match &tile.pixels {
+            Some(pixels) => {
+                assert_eq!(
+                    pixels.len(),
+                    *size,
+                    "the tile's stated pixels must fill the tile exactly"
+                );
+                buf.extend_from_slice(pixels);
+            }
+            None => buf.extend(std::iter::repeat_n(0x5au8, *size)),
+        }
     }
 
     // The `ZISRAWMETADATA` segment: the XML starts 256 bytes into the data.

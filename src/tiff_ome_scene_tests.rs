@@ -255,7 +255,28 @@ fn parse_ome_physical_size_units_convert() {
     let px = read.scenes[0].meta.px_size_um.expect("the sizes are declared");
     assert!((px.x - 0.1).abs() < 1e-6);
     assert!((px.y - 0.1).abs() < 1e-6);
-    assert!((px.z - 2.0).abs() < 1e-6);
+    assert!((px.z.expect("the Z step") - 2.0).abs() < 1e-6);
+}
+
+#[test]
+fn parse_ome_a_placeholder_z_step_is_dropped_and_says_so() {
+    // 1e-7 µm is a hundredth of the smallest step a microscope could have
+    // measured: the file wrote a placeholder where the Z step would go.
+    let xml = r#"<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+      <Image><Pixels DimensionOrder="XYCZT" Type="uint8"
+             SizeX="4" SizeY="3" SizeZ="1" SizeC="1" SizeT="1"
+             PhysicalSizeX="0.1" PhysicalSizeY="0.1" PhysicalSizeZ="1e-7"/>
+      </Image></OME>"#;
+    let read = read(xml);
+    let scene = &read.scenes[0];
+    let px = scene.meta.px_size_um.expect("the sizes are declared");
+    assert_eq!(px.z, None, "the placeholder is not a step");
+    assert!((px.x - 0.1).abs() < 1e-6, "the X size is published");
+    assert_eq!(
+        scene.meta.notes,
+        vec![crate::calibration::z_step_note(1e-7).expect("a placeholder earns a note")],
+        "the note names the placeholder the file stated"
+    );
 }
 
 #[test]
@@ -287,5 +308,5 @@ fn parse_ome_minimal_pixels() {
     assert_eq!(scene.meta.dtype, DType::U16);
     assert_eq!(scene.meta.channels[1].name.as_deref(), Some("GFP"));
     let px = scene.meta.px_size_um.expect("the sizes are declared");
-    assert!((px.z - 0.5).abs() < 1e-6);
+    assert!((px.z.expect("the Z step") - 0.5).abs() < 1e-6);
 }

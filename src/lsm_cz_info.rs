@@ -21,9 +21,10 @@
 //! publishes one scene and unnamed channels. Reading past the struct would
 //! read the strip data that follows it and take it for metadata.
 
+use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::lsm_bytes::{read_f64, read_i32};
-use crate::types::{Endian, PxSizeUm};
+use crate::types::Endian;
 
 /// The magic every LSM file's CZ-LSM-Info struct starts with.
 const MAGIC: i32 = 0x0400_494C;
@@ -58,7 +59,7 @@ pub struct CzTag {
 }
 
 /// The geometry, calibration and pointers the CZ-LSM-Info struct states.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CzInfo {
     /// `DimensionX`: the width in pixels.
     pub dim_x: i32,
@@ -77,8 +78,9 @@ pub struct CzInfo {
     /// The file offset of the channel-colours block, when the struct states
     /// one.
     pub channel_colors_offset: Option<usize>,
-    /// The voxel size, when the struct states one.
-    pub px_size_um: Option<PxSizeUm>,
+    /// The voxel size, when the struct states one, and the notes on the
+    /// calibration it could not use.
+    pub calibration: Calibration,
 }
 
 /// Read the CZ-LSM-Info struct at `tag.offset`.
@@ -142,22 +144,25 @@ pub fn parse(buf: &[u8], tag: CzTag, e: Endian) -> Result<CzInfo> {
     }
 
     // The voxel sizes are best-effort: present only if the struct reaches
-    // them, and only if all three are strictly positive.
-    let px_size_um = if length >= VOXEL_END {
+    // them. X and Y must be strictly positive for a pixel size to exist at
+    // all; the Z step goes through the shared rule, so a struct that states
+    // no Z step (or states a placeholder) publishes `None` for it while the
+    // pixel size it does state is still published.
+    let calibration = if length >= VOXEL_END {
         let vx = read_f64(buf, tag.offset + VOXEL_AT, e)?;
         let vy = read_f64(buf, tag.offset + VOXEL_AT + 8, e)?;
         let vz = read_f64(buf, tag.offset + VOXEL_AT + 16, e)?;
-        if vx > 0.0 && vy > 0.0 && vz > 0.0 {
-            Some(PxSizeUm {
-                z: (vz * 1e6) as f32,
-                y: (vy * 1e6) as f32,
-                x: (vx * 1e6) as f32,
-            })
+        if vx > 0.0 && vy > 0.0 {
+            Calibration::sized(
+                (vx * 1e6) as f32,
+                (vy * 1e6) as f32,
+                Some((vz * 1e6) as f32),
+            )
         } else {
-            None
+            Calibration::default()
         }
     } else {
-        None
+        Calibration::default()
     };
 
     // The channel-colours pointer is an absolute file offset.
@@ -188,7 +193,7 @@ pub fn parse(buf: &[u8], tag: CzTag, e: Endian) -> Result<CzInfo> {
         dim_p,
         dim_m,
         channel_colors_offset,
-        px_size_um,
+        calibration,
     })
 }
 
@@ -233,16 +238,39 @@ mod tests {
         assert_eq!(info.dim_z, 35);
         assert_eq!(info.dim_channels, 2);
         assert_eq!(info.dim_time, 1);
-        let px = info.px_size_um.expect("the voxel size");
-        assert!((px.z - 0.5).abs() < 1e-6);
+        let px = info.calibration.px_size_um.expect("the voxel size");
+        assert!((px.z.expect("the Z step") - 0.5).abs() < 1e-6);
         assert!((px.x - 0.06589411).abs() < 1e-4);
+        assert!(info.calibration.notes.is_empty(), "nothing was dropped");
+    }
+
+    #[test]
+    fn a_placeholder_z_step_is_dropped_and_says_so() {
+        // 1e-19 m is the sentinel some writers put in the Z field: it is
+        // 1e-13 um, no distance a microscope measured. The X/Y voxel sizes
+        // are real and are still published.
+        let mut buf = struct_of(64);
+        buf[40..48].copy_from_slice(&0.06589411e-6f64.to_le_bytes());
+        buf[48..56].copy_from_slice(&0.06589411e-6f64.to_le_bytes());
+        buf[56..64].copy_from_slice(&1e-19f64.to_le_bytes());
+
+        let info = parse(&buf, tag(64), Endian::Little).unwrap();
+        let px = info.calibration.px_size_um.expect("the voxel size");
+        assert_eq!(px.z, None, "the placeholder is not a step");
+        assert!((px.x - 0.06589411).abs() < 1e-4, "the X size is published");
+        assert_eq!(
+            info.calibration.notes,
+            vec![crate::calibration::z_step_note(1e-13)
+                .expect("a placeholder earns a note")],
+            "the note names the placeholder the file stated"
+        );
     }
 
     #[test]
     fn a_struct_that_does_not_reach_the_voxel_sizes_has_none() {
         // 40 bytes: the dimensions are there, the voxel sizes are not.
         let info = parse(&struct_of(40), tag(40), Endian::Little).unwrap();
-        assert!(info.px_size_um.is_none());
+        assert!(info.calibration.px_size_um.is_none());
     }
 
     #[test]
