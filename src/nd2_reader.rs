@@ -37,8 +37,9 @@
 //!
 //! * Modern ND2 only (chunk magic `0x0ABECEDA`); legacy JPEG2000 ND2
 //!   (`0x0C000000`) is `Error::Unsupported`.
-//! * Uncompressed frames only (`eCompression` absent or `== 2`); lossless/lossy
-//!   (`0`/`1`) are `Error::Unsupported`.
+//! * Uncompressed frames only (`eCompression == 2`, the value both real
+//!   samples state); every other value — and a file that states none — is
+//!   `Error::Unsupported`, naming the value it refused.
 //! * Experiment loops limited to `{TimeLoop, NETimeLoop -> T, ZStackLoop -> Z,
 //!   XYPosLoop -> scene/P}` (`SpectLoop` is skipped, per the reference). Any
 //!   other surviving loop type is `Error::Unsupported`.
@@ -50,6 +51,19 @@
 //! with a per-row stride of `widthBytes` BYTES (which may exceed
 //! `width * comp * itemsize` due to padding). Each component is returned as its
 //! own grayscale plane (`samples == 1`), matching the LSM/LIF convention.
+//!
+//! Because the rows sit at computable byte offsets, a SUB-REGION of a plane
+//! can be read without decoding the whole plane: `region()` gathers only the
+//! rows the rectangle covers (one copy per row, or per pixel when the frame
+//! interleaves several components). The result is byte-identical to cropping
+//! the whole plane.
+//!
+//! A file whose plane is over the decode ceiling
+//! ([`MAX_DECODED_PLANE_BYTES`](crate::guard::MAX_DECODED_PLANE_BYTES)) is
+//! NOT refused: the ceiling guards ONE materialisation, not the file's
+//! existence. The file is published, `plane()` refuses the materialisation
+//! with [`Error::OversizedAllocation`], and `region()` serves windows of it —
+//! exactly as the CZI reader does for a whole-slide scene.
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -62,7 +76,8 @@ use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, SceneMeta,
+    checked_region, empty_region_plane, ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader,
+    PixelRect, Plane, PlaneBuf, SceneMeta,
 };
 
 // --- container constants ------------------------------------------------------
@@ -102,6 +117,9 @@ const MAX_LOOP_TYPE: i64 = 10;
 const MAX_LOOP_COUNT: usize = 1_000_000;
 /// Upper bound on component count (channels) in one frame.
 const MAX_COMPONENTS: usize = 1_024;
+/// The `eCompression` value that means "the frames are stored uncompressed",
+/// and the only one the reader decodes. Both real samples state exactly this.
+const COMPRESSION_NONE: i64 = 2;
 /// Upper bound on inflated CLX metadata (guards a zlib decompression bomb).
 const MAX_INFLATED_CLX_BYTES: usize = 256 * 1024 * 1024;
 
@@ -632,13 +650,27 @@ fn parse_attributes(buf: &[u8], map: &HashMap<Vec<u8>, (u64, u64)>) -> Result<Nd
         .get_u32("uiBpcInMemory")
         .ok_or_else(|| Error::Parse("ND2 attributes missing uiBpcInMemory".to_string()))?;
 
-    // Compression: absent or 2 (none) is decodable; 0 (lossless) / 1 (lossy) not.
-    if let Some(e) = a.get_i64("eCompression") {
-        if e == 0 || e == 1 {
+    // Compression: the reader decodes UNCOMPRESSED frames only, and the value
+    // it accepts is the one Nikon means by "no compression" — `2`. Both real
+    // samples (the reference stack and the corpus file) state exactly that,
+    // so there is no evidence for reading any other value as uncompressed.
+    // Every other value is refused BY VALUE, so the reason names what the
+    // file said instead of guessing what it meant; a file that states NO
+    // value at all is refused too, because an absent value says nothing about
+    // how the frames are stored.
+    match a.get_i64("eCompression") {
+        Some(e) if e != COMPRESSION_NONE => {
+            return Err(Error::Unsupported(format!(
+                "ND2 eCompression {e} is not uncompressed ({COMPRESSION_NONE}); compressed ND2 \
+                 not yet supported"
+            )));
+        }
+        None => {
             return Err(Error::Unsupported(
-                "compressed ND2 (lossless/lossy) not yet supported".to_string(),
+                "ND2 states no eCompression; only uncompressed frames are supported".to_string(),
             ));
         }
+        Some(_) => {}
     }
 
     let dtype = match bpc {
@@ -1074,8 +1106,13 @@ impl ImageReader for Nd2Reader {
             y: attrs.height,
             x: attrs.width,
         };
-        // Refuse an absurd plane BEFORE anything can allocate one.
-        dims.checked_plane_bytes(attrs.dtype)?;
+        // Size the plane WITHOUT the decode ceiling: the ceiling guards ONE
+        // materialisation, not the file's existence. A file whose plane is too
+        // big to hold in RAM is still PUBLISHED — `plane()` refuses the
+        // materialisation and `region()` serves windows of it — exactly as the
+        // CZI reader does for a whole-slide scene. Only a size that OVERFLOWS
+        // the reader's byte arithmetic refuses the file.
+        dims.plane_bytes_no_ceiling(attrs.dtype)?;
 
         // --- best-effort metadata (never gates open) ---
         let cal_um = parse_calibration_um(buf, &map);
@@ -1135,22 +1172,100 @@ impl ImageReader for Nd2Reader {
         let seq = seq_index(&self.loops, scene, t, z)?;
         self.decode_plane(seq, c)
     }
+
+    /// ND2 frames are stored uncompressed (the reader refuses every file whose
+    /// `eCompression` is not the uncompressed value), with every row at a
+    /// computable byte offset, so a sub-rectangle of a plane is read from the
+    /// frame's rows alone — the whole plane is never decoded.
+    fn supports_region(&self) -> bool {
+        true
+    }
+
+    /// Read only the rows of `rect` out of the frame's pixel block.
+    ///
+    /// The result is byte-identical to `self.plane(scene, t, c, z)?.crop(rect)`:
+    /// the same little-endian bytes are converted to native endianness once,
+    /// over the rect alone. The output buffer is sized by the RECT, so the
+    /// decode ceiling applies to what is materialised, never to the full
+    /// plane — a file whose plane is over the ceiling is still readable here,
+    /// one window at a time.
+    fn region(
+        &self,
+        scene: usize,
+        t: usize,
+        c: usize,
+        z: usize,
+        rect: PixelRect,
+    ) -> Result<Plane> {
+        if scene >= self.scenes {
+            return Err(Error::SceneOutOfRange { scene, count: self.scenes });
+        }
+        // Validate the coordinate FIRST, then the rect — the same order and the
+        // same wording as every other reader (the shared helper).
+        checked_region("ND2 region", &self.dims, scene, t, c, z, rect)?;
+
+        // An empty rectangle covers no pixels: the answer is an empty plane,
+        // the same one the trait's default returns.
+        if rect.is_empty() {
+            return empty_region_plane(self.dtype, 1, rect);
+        }
+
+        // Size the OUTPUT by the RECT, never by the plane: the ceiling
+        // (`MAX_DECODED_PLANE_BYTES`) guards what is materialised, so a small
+        // window of a huge plane is not refused.
+        let rect_dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: rect.h,
+            x: rect.w,
+        };
+        let out_bytes = rect_dims.checked_plane_bytes(self.dtype)?;
+
+        let seq = seq_index(&self.loops, scene, t, z)?;
+        let pixels = self.frame_pixels(seq)?;
+        // The frame must hold every row it declares — the SAME check
+        // `decode_plane` makes. A caller that reads only regions must be able
+        // to tell a short frame from a whole one.
+        self.check_frame_length(pixels)?;
+
+        let mut raw = vec![0u8; out_bytes];
+        if self.comp == 1 {
+            // One component per pixel: the rect's pixels are CONTIGUOUS within
+            // a row (a padded row's padding sits AFTER its pixels), so a row
+            // of the rect is one copy.
+            self.gather_contiguous_rows(pixels, rect, &mut raw)?;
+        } else {
+            // Interleaved components: a pixel of component `c` sits at
+            // `x*comp*itemsize + c*itemsize` inside its row, so the rect's
+            // pixels are one copy each.
+            self.gather_interleaved_pixels(pixels, rect, c, &mut raw)?;
+        }
+
+        // Raw pixel bytes are little-endian; `from_bytes` byteswaps to native.
+        let data = PlaneBuf::from_bytes(self.dtype, Endian::Little, &raw)?;
+        Plane::new(data, [rect.h, rect.w])
+    }
 }
 
 impl Nd2Reader {
-    /// Decode component `c` of frame `seq` into a contiguous grayscale plane.
-    fn decode_plane(&self, seq: usize, c: usize) -> Result<Plane> {
+    /// The pixel bytes of frame `seq`: the chunk `ImageDataSeq|{seq}!`'s data
+    /// after its 8-byte prefix.
+    fn frame_pixels(&self, seq: usize) -> Result<&[u8]> {
         let name = format!("ImageDataSeq|{seq}!");
         let (off, _) = self.map.get(name.as_bytes()).ok_or_else(|| {
             Error::Decode(format!("ND2 missing frame chunk {name}"))
         })?;
         let data = chunk_data(&self.mmap, *off, None)?;
         // 8-byte prefix, then `height * widthBytes` pixel bytes.
-        let pixels = data
-            .get(8..)
-            .ok_or_else(|| Error::Decode("ND2 frame chunk shorter than its 8-byte prefix".to_string()))?;
+        data.get(8..)
+            .ok_or_else(|| Error::Decode("ND2 frame chunk shorter than its 8-byte prefix".to_string()))
+    }
 
-        let bps = self.dtype.size_bytes();
+    /// The frame must hold every row it declares: `height * widthBytes` pixel
+    /// bytes. A frame that is short is a broken file, and `plane()` and
+    /// `region()` must say so the same way.
+    fn check_frame_length(&self, pixels: &[u8]) -> Result<()> {
         let need = self
             .height
             .checked_mul(self.width_bytes)
@@ -1161,10 +1276,110 @@ impl Nd2Reader {
                 pixels.len()
             )));
         }
+        Ok(())
+    }
 
-        // Guard the OUTPUT plane size before allocating anything.
+    /// Copy the rect's rows out of a frame whose pixels are CONTIGUOUS within
+    /// a row (one component per pixel): a row of the rect is one copy.
+    fn gather_contiguous_rows(
+        &self,
+        pixels: &[u8],
+        rect: PixelRect,
+        raw: &mut [u8],
+    ) -> Result<()> {
+        let bps = self.dtype.size_bytes();
+        let row_bytes = rect
+            .w
+            .checked_mul(bps)
+            .ok_or_else(|| Error::Decode("ND2 region row size overflow".to_string()))?;
+        let col_offset = rect
+            .x
+            .checked_mul(bps)
+            .ok_or_else(|| Error::Decode("ND2 region column offset overflow".to_string()))?;
+        for row in 0..rect.h {
+            let src = (rect.y + row)
+                .checked_mul(self.width_bytes)
+                .and_then(|v| v.checked_add(col_offset))
+                .ok_or_else(|| Error::Decode("ND2 region offset overflow".to_string()))?;
+            let end = src
+                .checked_add(row_bytes)
+                .ok_or_else(|| Error::Decode("ND2 region offset overflow".to_string()))?;
+            let span = pixels.get(src..end).ok_or_else(|| {
+                Error::Decode("ND2 region row runs past the frame".to_string())
+            })?;
+            let dst = row * row_bytes;
+            raw[dst..dst + row_bytes].copy_from_slice(span);
+        }
+        Ok(())
+    }
+
+    /// Copy the rect's pixels out of a frame whose components are INTERLEAVED:
+    /// a pixel of component `c` sits at `x*comp*itemsize + c*itemsize` inside
+    /// its row, so the rect's pixels are one copy each.
+    fn gather_interleaved_pixels(
+        &self,
+        pixels: &[u8],
+        rect: PixelRect,
+        c: usize,
+        raw: &mut [u8],
+    ) -> Result<()> {
+        let bps = self.dtype.size_bytes();
+        let row_bytes = rect
+            .w
+            .checked_mul(bps)
+            .ok_or_else(|| Error::Decode("ND2 region row size overflow".to_string()))?;
+        // Byte distance between two neighbouring pixels of a row, and the
+        // offset of this component inside one pixel.
+        let pixel_stride = self
+            .comp
+            .checked_mul(bps)
+            .ok_or_else(|| Error::Decode("ND2 region pixel stride overflow".to_string()))?;
+        let comp_offset = c
+            .checked_mul(bps)
+            .ok_or_else(|| Error::Decode("ND2 region component offset overflow".to_string()))?;
+        for row in 0..rect.h {
+            let row_start = (rect.y + row)
+                .checked_mul(self.width_bytes)
+                .ok_or_else(|| Error::Decode("ND2 region offset overflow".to_string()))?;
+            for i in 0..rect.w {
+                let src = row_start
+                    .checked_add(
+                        (rect.x + i)
+                            .checked_mul(pixel_stride)
+                            .ok_or_else(|| Error::Decode("ND2 region offset overflow".to_string()))?,
+                    )
+                    .and_then(|v| v.checked_add(comp_offset))
+                    .ok_or_else(|| Error::Decode("ND2 region offset overflow".to_string()))?;
+                let end = src
+                    .checked_add(bps)
+                    .ok_or_else(|| Error::Decode("ND2 region offset overflow".to_string()))?;
+                let span = pixels.get(src..end).ok_or_else(|| {
+                    Error::Decode("ND2 region pixel runs past the frame".to_string())
+                })?;
+                let dst = row * row_bytes + i * bps;
+                raw[dst..dst + bps].copy_from_slice(span);
+            }
+        }
+        Ok(())
+    }
+
+    /// Decode component `c` of frame `seq` into a contiguous grayscale plane.
+    fn decode_plane(&self, seq: usize, c: usize) -> Result<Plane> {
+        // Guard the OUTPUT plane size BEFORE anything else: the decode ceiling
+        // guards what is materialised, so a plane over it is refused even when
+        // the frame is short — the reason is the ceiling (the file's own
+        // problem) and not the frame's.
         let plane_dims = Dims5 { t: 1, c: 1, z: 1, y: self.height, x: self.width };
         plane_dims.checked_plane_bytes(self.dtype)?;
+
+        let pixels = self.frame_pixels(seq)?;
+        self.check_frame_length(pixels)?;
+
+        let bps = self.dtype.size_bytes();
+        let need = self
+            .height
+            .checked_mul(self.width_bytes)
+            .ok_or_else(|| Error::Decode("ND2 frame size overflow".to_string()))?;
 
         // Fast path: a single, unpadded component IS the contiguous plane.
         if self.comp == 1 && self.width_bytes == self.width * bps {
@@ -1473,75 +1688,11 @@ mod tests {
     }
 
     // --- synthetic end-to-end ND2 (open + decode + out-of-range) -------------
-
-    /// Append a chunk (`magic` + `name_len` + `data_len` + name + data) to `file`
-    /// and return the offset of its header.
-    fn push_chunk(file: &mut Vec<u8>, name: &[u8], data: &[u8]) -> u64 {
-        let offset = file.len() as u64;
-        file.extend_from_slice(&ND2_CHUNK_MAGIC.to_le_bytes());
-        file.extend_from_slice(&(name.len() as u32).to_le_bytes());
-        file.extend_from_slice(&(data.len() as u64).to_le_bytes());
-        file.extend_from_slice(name);
-        file.extend_from_slice(data);
-        offset
-    }
-
-    /// A 2x2, single-component, U16, Z=2 synthetic ND2 (no padding).
-    fn synthetic_nd2() -> Vec<u8> {
-        let attrs = rec_level(
-            "SLxImageAttributes",
-            &[
-                rec_u32("uiWidth", 2),
-                rec_u32("uiWidthBytes", 4),
-                rec_u32("uiHeight", 2),
-                rec_u32("uiComp", 1),
-                rec_u32("uiBpcInMemory", 16),
-                rec_u32("uiBpcSignificant", 12),
-                rec_u32("uiSequenceCount", 2),
-                rec_u32("eCompression", 2),
-                rec_u32("ePixelType", 1),
-                rec_u32("uiVirtualComponents", 1),
-            ],
-        );
-        let exp = rec_level(
-            "SLxExperiment",
-            &[
-                rec_u32("eType", 4),
-                rec_level("uLoopPars", &[rec_u32("uiCount", 2), rec_f64("dZStep", 0.5)]),
-            ],
-        );
-
-        let frame = |vals: [u16; 4]| -> Vec<u8> {
-            let mut f = vec![0u8; 8]; // 8-byte prefix
-            for v in vals {
-                f.extend_from_slice(&v.to_le_bytes());
-            }
-            f
-        };
-        let f0 = frame([1, 2, 3, 4]);
-        let f1 = frame([5, 6, 7, 8]);
-
-        let mut file = Vec::new();
-        let mut sig = b"Ver3.0".to_vec();
-        sig.resize(64, 0);
-        push_chunk(&mut file, b"ND2 FILE SIGNATURE CHUNK NAME01!", &sig);
-        let attr_off = push_chunk(&mut file, b"ImageAttributesLV!", &attrs);
-        let exp_off = push_chunk(&mut file, b"ImageMetadataLV!", &exp);
-        let d0_off = push_chunk(&mut file, b"ImageDataSeq|0!", &f0);
-        let d1_off = push_chunk(&mut file, b"ImageDataSeq|1!", &f1);
-
-        let mut blob = Vec::new();
-        map_entry(&mut blob, b"ImageAttributesLV!", attr_off, attrs.len() as u64);
-        map_entry(&mut blob, b"ImageMetadataLV!", exp_off, exp.len() as u64);
-        map_entry(&mut blob, b"ImageDataSeq|0!", d0_off, f0.len() as u64);
-        map_entry(&mut blob, b"ImageDataSeq|1!", d1_off, f1.len() as u64);
-        blob.extend_from_slice(SIG_CHUNKMAP_END);
-        let map_off = push_chunk(&mut file, SIG_FILEMAP, &blob);
-
-        file.extend_from_slice(SIG_CHUNKMAP_END);
-        file.extend_from_slice(&map_off.to_le_bytes());
-        file
-    }
+    //
+    // The CONTAINER itself is written by the one ND2 writer of this crate,
+    // `tests/support/nd2.rs`; the tests that need a whole file live in
+    // `tests/nd2_open.rs`. What stays here are the record builders for the
+    // CLx parsing below, which are unit tests of private functions.
 
     fn temp_path() -> std::path::PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -1553,131 +1704,6 @@ mod tests {
             std::process::id(),
             n
         ))
-    }
-
-    fn open_synth(bytes: &[u8]) -> Nd2Reader {
-        let path = temp_path();
-        std::fs::write(&path, bytes).unwrap();
-        let r = Nd2Reader::open(&path);
-        let _ = std::fs::remove_file(&path);
-        r.unwrap()
-    }
-
-    #[test]
-    fn synthetic_open_decode_and_out_of_range() {
-        let reader = open_synth(&synthetic_nd2());
-        let meta = reader.meta();
-        assert_eq!(meta.scene_count(), 1);
-        let scene = meta.scene(0).unwrap();
-        assert_eq!(scene.dims, Dims5 { t: 1, c: 1, z: 2, y: 2, x: 2 });
-        assert_eq!(scene.dtype, DType::U16);
-        assert_eq!(scene.samples, 1);
-
-        let p0 = reader.plane(0, 0, 0, 0).unwrap();
-        assert_eq!(p0.shape, [2, 2]);
-        assert_eq!(p0.data, PlaneBuf::U16(vec![1, 2, 3, 4]));
-        let p1 = reader.plane(0, 0, 0, 1).unwrap();
-        assert_eq!(p1.data, PlaneBuf::U16(vec![5, 6, 7, 8]));
-
-        // Out-of-range coordinates are clean errors, never panics.
-        assert!(matches!(
-            reader.plane(0, 0, 0, 2),
-            Err(Error::OutOfRange { z: 2, .. })
-        ));
-        assert!(matches!(
-            reader.plane(0, 0, 1, 0),
-            Err(Error::OutOfRange { c: 1, .. })
-        ));
-        assert!(matches!(
-            reader.plane(1, 0, 0, 0),
-            Err(Error::SceneOutOfRange { scene: 1, .. })
-        ));
-    }
-
-    /// Build a single-frame (Z=1) synthetic U16 ND2 with an explicit component
-    /// count and row stride, so the general (non-fast-path) padded gather runs.
-    /// `pixel_block` is the raw `height * width_bytes` interleaved (Y,X,C) bytes
-    /// WITHOUT the 8-byte frame prefix.
-    fn synthetic_nd2_one_frame(
-        width: usize,
-        height: usize,
-        comp: usize,
-        width_bytes: usize,
-        pixel_block: &[u8],
-    ) -> Vec<u8> {
-        let attrs = rec_level(
-            "SLxImageAttributes",
-            &[
-                rec_u32("uiWidth", width as u32),
-                rec_u32("uiWidthBytes", width_bytes as u32),
-                rec_u32("uiHeight", height as u32),
-                rec_u32("uiComp", comp as u32),
-                rec_u32("uiBpcInMemory", 16),
-                rec_u32("uiBpcSignificant", 16),
-                rec_u32("uiSequenceCount", 1),
-                rec_u32("eCompression", 2),
-            ],
-        );
-        let exp = rec_level(
-            "SLxExperiment",
-            &[
-                rec_u32("eType", 4),
-                rec_level("uLoopPars", &[rec_u32("uiCount", 1)]),
-            ],
-        );
-        let mut frame = vec![0u8; 8]; // 8-byte prefix
-        frame.extend_from_slice(pixel_block);
-
-        let mut file = Vec::new();
-        let mut sig = b"Ver3.0".to_vec();
-        sig.resize(64, 0);
-        push_chunk(&mut file, b"ND2 FILE SIGNATURE CHUNK NAME01!", &sig);
-        let attr_off = push_chunk(&mut file, b"ImageAttributesLV!", &attrs);
-        let exp_off = push_chunk(&mut file, b"ImageMetadataLV!", &exp);
-        let d0_off = push_chunk(&mut file, b"ImageDataSeq|0!", &frame);
-
-        let mut blob = Vec::new();
-        map_entry(&mut blob, b"ImageAttributesLV!", attr_off, attrs.len() as u64);
-        map_entry(&mut blob, b"ImageMetadataLV!", exp_off, exp.len() as u64);
-        map_entry(&mut blob, b"ImageDataSeq|0!", d0_off, frame.len() as u64);
-        blob.extend_from_slice(SIG_CHUNKMAP_END);
-        let map_off = push_chunk(&mut file, SIG_FILEMAP, &blob);
-
-        file.extend_from_slice(SIG_CHUNKMAP_END);
-        file.extend_from_slice(&map_off.to_le_bytes());
-        file
-    }
-
-    #[test]
-    fn multicomponent_padded_gather() {
-        // width=3, height=2, comp=2, U16 (bps=2): 12 content bytes/row + 4 pad
-        // bytes = widthBytes 16. This forces the general gather path (comp != 1
-        // and widthBytes != width*bps), honouring the per-row byte stride.
-        let (width, height, comp, width_bytes) = (3usize, 2usize, 2usize, 16usize);
-        // Per-row interleaved (X,C) samples: [x0c0, x0c1, x1c0, x1c1, x2c0, x2c1].
-        let rows: [[u16; 6]; 2] = [[10, 11, 12, 13, 14, 15], [20, 21, 22, 23, 24, 25]];
-        let mut block = Vec::new();
-        for row in rows {
-            for v in row {
-                block.extend_from_slice(&v.to_le_bytes());
-            }
-            block.extend_from_slice(&[0xFF; 4]); // row padding, must be skipped
-        }
-        assert_eq!(block.len(), height * width_bytes);
-
-        let reader =
-            open_synth(&synthetic_nd2_one_frame(width, height, comp, width_bytes, &block));
-        let scene = reader.meta().scene(0).unwrap();
-        assert_eq!(scene.dims, Dims5 { t: 1, c: 2, z: 1, y: 2, x: 3 });
-
-        // Component 0 gathers samples at (x*comp + 0); component 1 at (x*comp + 1).
-        // Padding (0xFF) must never leak into either plane.
-        let p0 = reader.plane(0, 0, 0, 0).unwrap();
-        assert_eq!(p0.shape, [2, 3]);
-        assert_eq!(p0.data, PlaneBuf::U16(vec![10, 12, 14, 20, 22, 24]));
-        let p1 = reader.plane(0, 0, 1, 0).unwrap();
-        assert_eq!(p1.shape, [2, 3]);
-        assert_eq!(p1.data, PlaneBuf::U16(vec![11, 13, 15, 21, 23, 25]));
     }
 
     #[test]

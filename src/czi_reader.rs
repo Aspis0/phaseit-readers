@@ -153,8 +153,8 @@ use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, PixelRect, Plane, PlaneBuf,
-    RefusedScene, SceneMeta,
+    checked_region, empty_region_plane, ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader,
+    PixelRect, Plane, PlaneBuf, RefusedScene, SceneMeta,
 };
 
 /// Length of a ZISRAW segment header (`SID[16]` + `AllocatedSize` + `UsedSize`).
@@ -690,10 +690,20 @@ impl ImageReader for CziReader {
         let sc = self.scene_checked(scene, t, c, z)?;
         let d = sc.dims;
 
-        // Validate `rect` against the scene dims with CHECKED adds: an
-        // overflowing `x + w` / `y + h`, or a rect past `dims.x`/`dims.y`, is a
-        // clean `Decode` error (mirrors `Plane::crop` / the provided `region`
-        // default), never a wrap or panic.
+        // Validate the coordinate and the rect with the SHARED helper, so every
+        // reader rejects the same calls in the same order with the same
+        // wording. `scene_checked` above already checked the coordinate, so
+        // only the rect is new here.
+        checked_region("CZI region", &d, scene, t, c, z, rect)?;
+
+        // An empty rectangle covers no pixels: the answer is an empty plane,
+        // the same one the trait's default returns.
+        if rect.is_empty() {
+            return empty_region_plane(sc.dtype, sc.samples, rect);
+        }
+
+        // The rect's exclusive ends, for the tile intersection below. The adds
+        // cannot overflow: `checked_region` just rejected that case.
         let rect_x1 = rect.x.checked_add(rect.w).ok_or_else(|| {
             Error::Decode(format!(
                 "CZI region rect x+w overflows usize (x={}, w={})",
@@ -706,12 +716,6 @@ impl ImageReader for CziReader {
                 rect.y, rect.h
             ))
         })?;
-        if rect_x1 > d.x || rect_y1 > d.y {
-            return Err(Error::Decode(format!(
-                "CZI region rect {{x:{}, y:{}, w:{}, h:{}}} out of range for scene {} dims (x:{}, y:{})",
-                rect.x, rect.y, rect.w, rect.h, scene, d.x, d.y
-            )));
-        }
 
         // Per-pixel byte size: per-sample size x samples per pixel (color is
         // carried as interleaved samples, so the blit works on whole pixels).

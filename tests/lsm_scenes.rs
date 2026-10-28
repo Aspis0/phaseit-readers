@@ -30,6 +30,7 @@ fn tile_scan(dir: &std::path::Path, pages: Option<usize>) -> std::path::PathBuf 
             channel_names: Some(vec!["Ch2 GaAsP".to_string()]),
             scan_info_names: vec!["Ch2 GaAsP".to_string()],
             pages,
+            strips_per_channel: 1,
             cz_bytes: 464,
         },
     );
@@ -77,7 +78,7 @@ fn a_tile_scan_publishes_one_scene_per_tile() {
     // A scene outside the file is out of range, never a panic.
     assert!(matches!(
         reader.plane(4, 0, 0, 0),
-        Err(Error::OutOfRange { scene: 4, .. })
+        Err(Error::SceneOutOfRange { scene: 4, .. })
     ));
 }
 

@@ -46,15 +46,18 @@ use memmap2::Mmap;
 
 use crate::error::{Error, Result};
 use crate::io::map_file;
+use crate::tiff_layout;
 use crate::tiff_ome_planes::{self, OmePlan};
 use crate::tiff_ome_scene;
 use crate::tiff_page;
-use crate::tiff_plain::{self, PagesPlan};
+use crate::tiff_pages;
 use crate::tiff_palette;
-use crate::types::{DType, ImageMeta, ImageReader, Plane, PlaneBuf, RefusedScene};
-
-/// Concrete decoder type used everywhere in this module (cursor over the mmap).
-type TiffDec<'a> = Decoder<Cursor<&'a [u8]>>;
+use crate::tiff_plain::{self, PagesPlan};
+use crate::tiff_region::{self, TiffDec};
+use crate::types::{
+    checked_region, empty_region_plane, DType, Dims5, Endian, ImageMeta, ImageReader, PixelRect,
+    Plane, PlaneBuf, RefusedScene,
+};
 
 /// Generous cap for a single IFD value (e.g. a large OME-XML `ImageDescription`
 /// ASCII tag): real OME-XML runs from a few hundred KB to a few MB, so 64 MiB
@@ -133,6 +136,20 @@ pub struct TiffReader {
     /// order as `meta.scenes`. Empty for a plain TIFF, whose one scene is file
     /// position 0.
     file_indices: Vec<usize>,
+    /// What each page of the file states, in IFD order: the page's own facts
+    /// and how it is served by a window read. `None` service = the page keeps
+    /// the default path (decode the plane, then crop it). Decided at open, from
+    /// the page's own tags, in the ONE walk of the IFD chain — so `region()`
+    /// never has to work it out again, and never re-reads the file's chunk
+    /// offsets.
+    pages: Vec<tiff_pages::PageEntry>,
+    /// The byte order of the file's own samples.
+    endian: Endian,
+    /// Whether every published scene of THIS file is served by the native
+    /// `region()` path. Decided at open, per file: the trait's
+    /// `supports_region()` says nothing about which scene, so it may only be
+    /// true when every published scene of the file is served natively.
+    native_region: bool,
 }
 
 /// How a `(t, c, z)` coordinate of one scene resolves to an IFD.
@@ -228,15 +245,26 @@ impl ImageReader for TiffReader {
         // (e.g. `LimitsExceeded` on a big OME-XML block) -- see `description_from`.
         let description: Option<String> = description_from(dec.find_tag(Tag::ImageDescription))?;
 
+        // ONE walk over the file's IFD chain: the pages' own facts, which of
+        // them are real focal planes, and how each is served by a window
+        // read. The chain is not walked again below.
+        let pages = tiff_pages::walk_pages(&mut dec, &mmap)?;
+        let endian = tiff_layout::file_endian(&dec);
+
         let (scenes, plans, real_pages, refused, file_indices) = match description.as_deref() {
             // OME path resolves IFDs from its `<TiffData>` blocks, so it needs
             // no real-page table (left empty).
             Some(d) if looks_like_ome(d) => {
-                let ifd_count = tiff_page::image_count(&mut dec)?;
+                let ifd_count = pages.len();
                 let mut page_at = |ifd: usize| {
-                    dec.seek_to_image(ifd)
-                        .map_err(|e| Error::Decode(format!("seek to IFD {ifd}: {e}")))?;
-                    tiff_page::read_page_facts(&mut dec)
+                    pages
+                        .get(ifd)
+                        .ok_or_else(|| {
+                            Error::Decode(format!(
+                                "OME scene names IFD {ifd}, which the file does not hold"
+                            ))
+                        })?
+                        .facts(ifd)
                 };
                 let ome = tiff_ome_scene::parse_scenes(d, ifd_count, &mut page_at)?;
                 let refused = ome.refused;
@@ -261,7 +289,20 @@ impl ImageReader for TiffReader {
                 (scenes, plans, Vec::new(), refused, file_indices)
             }
             _ => {
-                let geometry = tiff_plain::infer_plain(&mut dec, description.as_deref())?;
+                // The plain path reads IFD 0's own tags (its colour model and
+                // its calibration), so the decoder goes back to it after the
+                // walk.
+                dec.seek_to_image(0)
+                    .map_err(|e| Error::Decode(format!("seek to IFD 0: {e}")))?;
+                // Only IFDs that are real focal planes count as planes;
+                // reduced-resolution / thumbnail / mask sub-files are dropped.
+                let real: Vec<usize> = pages
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, page)| !page.reduced)
+                    .map(|(ifd, _)| ifd)
+                    .collect();
+                let geometry = tiff_plain::infer_plain(&mut dec, description.as_deref(), &real)?;
                 let mut scene = geometry.scene;
                 scene.name = name.clone();
                 (
@@ -276,6 +317,10 @@ impl ImageReader for TiffReader {
 
         let meta = ImageMeta { name, scenes };
 
+        // Whether this file's published scenes are served by the native
+        // `region()` path. Decided per FILE, before the reader is published.
+        let native_region = scenes_serve_regions(&pages, &plans, &real_pages);
+
         Ok(TiffReader {
             mmap,
             meta,
@@ -283,6 +328,9 @@ impl ImageReader for TiffReader {
             real_pages,
             refused,
             file_indices,
+            pages,
+            endian,
+            native_region,
         })
     }
 
@@ -299,12 +347,7 @@ impl ImageReader for TiffReader {
     }
 
     fn plane(&self, scene: usize, t: usize, c: usize, z: usize) -> Result<Plane> {
-        let sm = self.meta.scene(scene).map_err(|_| Error::OutOfRange {
-            scene,
-            t,
-            c,
-            z,
-        })?;
+        let sm = self.meta.scene(scene)?;
         let d = sm.dims;
         if t >= d.t || c >= d.c || z >= d.z {
             return Err(Error::OutOfRange { scene, t, c, z });
@@ -348,6 +391,149 @@ impl ImageReader for TiffReader {
         };
         Plane::new_samples(buf, [d.y, d.x], samples as u32)
     }
+
+    fn supports_region(&self) -> bool {
+        self.native_region
+    }
+
+    /// Read only the part of the plane the rectangle covers.
+    ///
+    /// The result is byte-identical to `self.plane(scene, t, c, z)?.crop(rect)`:
+    /// the page's pixels are the same pixels, read the cheap way.
+    ///
+    /// HOW the window is read was decided at open, per page, from the page's
+    /// own tags (see [`tiff_region::page_service`]):
+    ///
+    /// * an UNCOMPRESSED page is read by COPYING the window's bytes out of
+    ///   the file — no decoder, no chunk buffer — so a page whose plane is
+    ///   over the decode ceiling is still readable here, one window at a time;
+    /// * a COMPRESSED page is read by decoding the chunks the window touches,
+    ///   which is only done while a chunk is much smaller than the plane — and
+    ///   never while a chunk is over the decode ceiling, because the cost rule
+    ///   keeps a chunk under 64 MiB;
+    /// * a page that is neither keeps the default path (decode the whole
+    ///   page, then crop it), which is byte-identical and always available —
+    ///   and which refuses a page over the decode ceiling, so such a page is
+    ///   NOT readable here. A file that holds such a page reports
+    ///   `supports_region() == false`.
+    ///
+    /// The output buffer is sized by the RECT, so the decode ceiling applies
+    /// to what is materialised — the window's own bytes, and the chunk a
+    /// compressed page decodes — never to the full plane.
+    fn region(
+        &self,
+        scene: usize,
+        t: usize,
+        c: usize,
+        z: usize,
+        rect: PixelRect,
+    ) -> Result<Plane> {
+        // Validate the coordinate FIRST, then the rect — the same order and
+        // the same wording as every other reader (the shared helper).
+        let sm = self.meta.scene(scene)?;
+        let d = sm.dims;
+        checked_region("TIFF region", &d, scene, t, c, z, rect)?;
+
+        let (ifd, samples) = self.resolve(scene, t, c, z)?;
+
+        // An empty rectangle covers no pixels: the answer is an empty plane,
+        // the same one the trait's default returns.
+        if rect.is_empty() {
+            return empty_region_plane(sm.dtype, samples as u32, rect);
+        }
+
+        // Size the OUTPUT by the RECT, never by the plane: the ceiling
+        // (`MAX_DECODED_PLANE_BYTES`) guards what is materialised, so a small
+        // window of a huge plane is not refused.
+        let rect_dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: rect.h,
+            x: rect.w,
+        };
+        let out_bytes = rect_dims.checked_plane_bytes_samples(sm.dtype, samples as u32)?;
+
+        // How this page is served was decided at open, from its own tags.
+        let page = self.pages.get(ifd).ok_or_else(|| {
+            Error::Decode(format!("the file holds no IFD {ifd} for this plane"))
+        })?;
+        let Some(service) = page.service.as_ref() else {
+            // This page keeps the default path (decode the whole page, then
+            // crop it), which is byte-identical and always available.
+            return self.plane(scene, t, c, z)?.crop(rect);
+        };
+        // Every page is checked against the scene that owns it, not only the
+        // first one the scene was read from.
+        let facts = page.facts(ifd)?;
+        facts.require_shape(ifd, (d.x, d.y), sm.dtype, samples)?;
+
+        let mut out = vec![0u8; out_bytes];
+        match service {
+            // The file's bytes ARE the page's pixels: they are copied out of
+            // the file, so nothing is decoded and no chunk buffer is needed.
+            tiff_region::Service::Raw { layout, table } => {
+                tiff_region::read_raw_window(&self.mmap, layout, table, &facts, rect, &mut out)?;
+                // The file's bytes are in the FILE's byte order.
+                let buf = PlaneBuf::from_bytes(sm.dtype, self.endian, &out)?;
+                Plane::new_samples(buf, [rect.h, rect.w], samples as u32)
+            }
+            // The chunks the window touches are decoded with the `tiff` crate.
+            tiff_region::Service::Chunks { layout } => {
+                // The decoder allocates the chunk it decodes, so its limits
+                // must be wide enough for that chunk — the cost rule keeps
+                // every chunk of a served page under 64 MiB — and for the
+                // window's own output.
+                let limits = tiff_limits(out_bytes.max(tiff_layout::MAX_CHUNK_BYTES));
+                let mut dec = self.decoder(ifd, limits)?;
+                tiff_region::decode_chunks(&mut dec, layout, &facts, rect, &mut out)?;
+                // The crate decodes into the host's byte order.
+                let buf = PlaneBuf::from_native_bytes(sm.dtype, &out)?;
+                Plane::new_samples(buf, [rect.h, rect.w], samples as u32)
+            }
+        }
+    }
+}
+
+impl TiffReader {
+    /// A fresh decoder over the mapped bytes, on the page `ifd`.
+    fn decoder(&self, ifd: usize, limits: tiff::decoder::Limits) -> Result<TiffDec<'_>> {
+        let mut dec: TiffDec<'_> = Decoder::new(Cursor::new(&self.mmap[..]))
+            .map_err(|e| Error::Decode(e.to_string()))?
+            .with_limits(limits);
+        dec.seek_to_image(ifd)
+            .map_err(|e| Error::Decode(format!("seek to IFD {ifd}: {e}")))?;
+        Ok(dec)
+    }
+}
+
+/// Whether every published scene of this file is served by the native
+/// `region()` path.
+///
+/// The trait's `supports_region()` says nothing about WHICH scene, so it may
+/// only be true when EVERY published scene of THIS file is served natively.
+/// The decision is therefore per file: each page the published scenes address
+/// is checked, and one page that is not served makes the whole file not
+/// served.
+fn scenes_serve_regions(
+    pages: &[tiff_pages::PageEntry],
+    plans: &[PlanePlan],
+    real_pages: &[usize],
+) -> bool {
+    for plan in plans {
+        let ifds: &[usize] = match plan {
+            // A plain TIFF publishes its real focal pages, in order.
+            PlanePlan::Pages(_) => real_pages,
+            // An OME scene publishes the pages its `<TiffData>` names.
+            PlanePlan::Ome(plan) => &plan.ifds,
+        };
+        for ifd in ifds {
+            if pages.get(*ifd).and_then(|page| page.service.as_ref()).is_none() {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Turn a raw `find_tag(Tag::ImageDescription)` result into `Option<String>`,

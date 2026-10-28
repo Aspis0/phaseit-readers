@@ -108,7 +108,7 @@ fn lsm_geometry_and_out_of_range() {
     }
     assert!(matches!(
         reader.plane(1, 0, 0, 0),
-        Err(Error::OutOfRange { scene: 1, .. })
+        Err(Error::SceneOutOfRange { scene: 1, .. })
     ));
 }
 
@@ -167,7 +167,7 @@ fn lsm_tile_scan_publishes_one_scene_per_tile() {
     // A scene outside the file is out of range, never a panic.
     assert!(matches!(
         reader.plane(49, 0, 0, 0),
-        Err(Error::OutOfRange { scene: 49, .. })
+        Err(Error::SceneOutOfRange { scene: 49, .. })
     ));
 }
 

@@ -60,8 +60,10 @@ use crate::lsm_bytes::{read_u16, read_u32, read_u8};
 use crate::lsm_channel_colors::read_channel_meta;
 use crate::lsm_cz_info::{self, CzTag};
 use crate::lsm_positions::{build_scenes, LsmLayout};
+use crate::lsm_region;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf,
+    checked_region, empty_region_plane, ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader,
+    PixelRect, Plane, PlaneBuf,
 };
 
 /// Private LSM tag carrying the `CZ-LSM-Info` geometry/calibration struct.
@@ -109,6 +111,10 @@ pub struct LsmReader {
     strips_per_channel: usize,
     /// Real (non-reduced) pages, in file order. `real_pages[page_index]`.
     real_pages: Vec<PageStrips>,
+    /// Whether every scene of THIS file is served by the native `region()`
+    /// path. Decided at open: a window can only be read out of strips that
+    /// hold whole rows.
+    native_region: bool,
 }
 
 impl ImageReader for LsmReader {
@@ -126,8 +132,13 @@ impl ImageReader for LsmReader {
             x: parsed.x,
         };
 
-        // Size guard: refuse absurd plane dimensions before we ever index bytes.
-        dims.checked_plane_bytes(parsed.dtype)?;
+        // Size the plane WITHOUT the decode ceiling: the ceiling guards ONE
+        // materialisation, not the file's existence. A file whose plane is too
+        // big to hold in RAM is still PUBLISHED — `plane()` refuses the
+        // materialisation and `region()` serves windows of it — exactly as the
+        // CZI, LIF and ND2 readers do. Only a size that OVERFLOWS the reader's
+        // byte arithmetic is refused here.
+        dims.plane_bytes_no_ceiling(parsed.dtype)?;
 
         // Channel names and display colours come from the file's
         // channel-colours block. A file without one still opens; its channels
@@ -154,6 +165,22 @@ impl ImageReader for LsmReader {
             scenes,
         };
 
+        // Whether a window can be read out of this file's strips (see
+        // `strips_hold_whole_rows`). Decided per FILE, before the reader is
+        // published.
+        let native_region = match dims.x.checked_mul(parsed.dtype.size_bytes()) {
+            Some(row_bytes) => parsed.real_pages.iter().all(|page| {
+                strips_hold_whole_rows(
+                    page,
+                    parsed.strips_per_channel,
+                    dims.c,
+                    row_bytes,
+                    dims.y,
+                )
+            }),
+            None => false,
+        };
+
         Ok(LsmReader {
             mmap,
             meta,
@@ -163,6 +190,7 @@ impl ImageReader for LsmReader {
             layout: parsed.layout,
             strips_per_channel: parsed.strips_per_channel,
             real_pages: parsed.real_pages,
+            native_region,
         })
     }
 
@@ -174,7 +202,13 @@ impl ImageReader for LsmReader {
         let d = self.dims;
         // Every coordinate must be inside the scene it addresses. Reject any
         // other coordinate as OutOfRange (never panic, never wrap).
-        if scene >= self.layout.scene_count() || t >= d.t || c >= d.c || z >= d.z {
+        if scene >= self.layout.scene_count() {
+            return Err(Error::SceneOutOfRange {
+                scene,
+                count: self.layout.scene_count(),
+            });
+        }
+        if t >= d.t || c >= d.c || z >= d.z {
             return Err(Error::OutOfRange { scene, t, c, z });
         }
 
@@ -243,6 +277,144 @@ impl ImageReader for LsmReader {
         let buf = PlaneBuf::from_bytes(self.dtype, self.endian, &raw)?;
         Plane::new(buf, [d.y, d.x])
     }
+
+    fn supports_region(&self) -> bool {
+        self.native_region
+    }
+
+    /// Read only the rows of the plane the rectangle covers.
+    ///
+    /// The result is byte-identical to `self.plane(scene, t, c, z)?.crop(rect)`:
+    /// the same strip bytes are read and byteswapped, over the rows the
+    /// rectangle covers alone. The output buffer is sized by the RECT, so the
+    /// decode ceiling applies to what is materialised, never to the full
+    /// plane — a file whose plane is over the ceiling is still readable here,
+    /// one window at a time.
+    fn region(
+        &self,
+        scene: usize,
+        t: usize,
+        c: usize,
+        z: usize,
+        rect: PixelRect,
+    ) -> Result<Plane> {
+        // Validate the coordinate FIRST, then the rect — the same order and
+        // the same wording as every other reader (the shared helper).
+        let d = self.dims;
+        if scene >= self.layout.scene_count() {
+            return Err(Error::SceneOutOfRange {
+                scene,
+                count: self.layout.scene_count(),
+            });
+        }
+        if t >= d.t || c >= d.c || z >= d.z {
+            return Err(Error::OutOfRange { scene, t, c, z });
+        }
+        checked_region("LSM region", &d, scene, t, c, z, rect)?;
+
+        // An empty rectangle covers no pixels: the answer is an empty plane,
+        // the same one the trait's default returns.
+        if rect.is_empty() {
+            return empty_region_plane(self.dtype, 1, rect);
+        }
+
+        if !self.native_region {
+            // This file's strips do not hold whole rows, so a window cannot be
+            // read out of them. The default path (decode the plane, then crop)
+            // is byte-identical and always available.
+            return self.plane(scene, t, c, z)?.crop(rect);
+        }
+
+        // Size the OUTPUT by the RECT, never by the plane: the ceiling
+        // (`MAX_DECODED_PLANE_BYTES`) guards what is materialised, so a small
+        // window of a huge plane is not refused.
+        let rect_dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: rect.h,
+            x: rect.w,
+        };
+        let out_bytes = rect_dims.checked_plane_bytes(self.dtype)?;
+
+        // (scene, t, c, z) → real page → planar strip block c (see `plane()`).
+        let page_idx = self
+            .layout
+            .page_index(scene, z)
+            .ok_or(Error::OutOfRange { scene, t, c, z })?;
+        let page = self
+            .real_pages
+            .get(page_idx)
+            .ok_or(Error::OutOfRange { scene, t, c, z })?;
+
+        let strips = lsm_region::Strips {
+            offsets: &page.offsets,
+            bytes: &page.bytes,
+            per_channel: self.strips_per_channel,
+        };
+        let mut raw = vec![0u8; out_bytes];
+        lsm_region::gather_rows(
+            &self.mmap,
+            strips,
+            c,
+            &d,
+            self.dtype,
+            rect,
+            &mut raw,
+        )?;
+
+        // The strips are native pixel bytes in the container's byte order;
+        // `from_bytes` byteswaps to native as needed (LSM is little-endian).
+        let buf = PlaneBuf::from_bytes(self.dtype, self.endian, &raw)?;
+        Plane::new(buf, [rect.h, rect.w])
+    }
+}
+
+/// Whether a page's strips hold whole rows, so a window can be read out of
+/// them.
+///
+/// The default `region()` path (decode the whole plane, then crop) needs
+/// nothing of the strips; the native path reads the rows of a rectangle out of
+/// the strips that hold them, which needs each strip to hold a whole number of
+/// rows and the channel's strips to cover the plane's rows.
+fn strips_hold_whole_rows(
+    page: &PageStrips,
+    strips_per_channel: usize,
+    channels: usize,
+    row_bytes: usize,
+    plane_rows: usize,
+) -> bool {
+    if row_bytes == 0 {
+        return false;
+    }
+    for channel in 0..channels {
+        let start = match channel.checked_mul(strips_per_channel) {
+            Some(start) => start,
+            None => return false,
+        };
+        let end = match start.checked_add(strips_per_channel) {
+            Some(end) => end,
+            None => return false,
+        };
+        if end > page.bytes.len() {
+            return false;
+        }
+        let mut rows = 0usize;
+        for s in start..end {
+            let count = match usize::try_from(page.bytes[s]) {
+                Ok(count) => count,
+                Err(_) => return false,
+            };
+            if count % row_bytes != 0 {
+                return false;
+            }
+            rows += count / row_bytes;
+        }
+        if rows != plane_rows {
+            return false;
+        }
+    }
+    true
 }
 
 /// Everything `parse_lsm` extracts from the container.

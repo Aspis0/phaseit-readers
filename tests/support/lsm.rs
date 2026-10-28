@@ -39,12 +39,7 @@ const CZ_DIMENSION_M: usize = 268;
 const COLOR_TABLE_AT: usize = 40;
 
 /// The display colours the fixture writes, one per channel.
-const COLORS: [[u8; 3]; 4] = [
-    [255, 0, 0],
-    [0, 255, 0],
-    [0, 0, 255],
-    [255, 255, 255],
-];
+const COLORS: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
 
 /// The shape of a synthetic LSM file.
 #[derive(Debug, Clone)]
@@ -71,6 +66,10 @@ pub struct LsmSpec {
     /// How many real pages to write. `None` writes `t * z * P * M` pages, the
     /// count the counts imply; a smaller number makes the file inconsistent.
     pub pages: Option<usize>,
+    /// How many strips each channel's block holds. An LSM file usually holds
+    /// ONE strip per channel; a file with more is a multi-strip page, and a
+    /// window read has to gather the rows out of all of them.
+    pub strips_per_channel: usize,
     /// The byte count the CZ-LSM-Info tag declares, and the struct repeats. A
     /// shorter struct states no channel-colours block and no tile counts,
     /// however much the bytes beyond it hold.
@@ -91,6 +90,7 @@ impl LsmSpec {
             channel_names: None,
             scan_info_names: Vec::new(),
             pages: None,
+            strips_per_channel: 1,
             cz_bytes: CZ_LEN,
         }
     }
@@ -110,6 +110,9 @@ pub struct LsmOffsets {
     pub cz: usize,
     /// The file offset of the channel-colours block, when the file has one.
     pub colors: Option<usize>,
+    /// The file offset of the pixel data: the strips, in the order the file
+    /// states them (every page's channels, page by page).
+    pub data: usize,
 }
 
 /// One little-endian classic-TIFF IFD entry (tag, type, count, value/offset).
@@ -197,22 +200,34 @@ pub fn build(spec: &LsmSpec) -> (Vec<u8>, LsmOffsets) {
 
     let cz_at = ifds_end;
     let colors_at = cz_at + CZ_LEN;
-    let colors = spec.channel_names.as_ref().map(|names| channel_colors_block(names));
+    let colors = spec
+        .channel_names
+        .as_ref()
+        .map(|names| channel_colors_block(names));
     let scan_info_at = colors_at + colors.as_ref().map_or(0, |c| c.len());
     let scan_info = scan_info_block(&spec.scan_info_names);
 
-    // The strip tables: one entry per (page, channel) strip.
-    let strips = pages * spec.channels;
+    // The strip tables: one entry per (page, channel, strip) strip.
+    let strips_per_channel = spec.strips_per_channel.max(1);
+    assert_eq!(
+        plane_bytes % strips_per_channel,
+        0,
+        "the plane's bytes split evenly into the strips"
+    );
+    let strip_bytes = plane_bytes / strips_per_channel;
+    let strips = pages * spec.channels * strips_per_channel;
     let strip_offsets_at = scan_info_at + scan_info.len();
     let strip_counts_at = strip_offsets_at + strips * 4;
     let data_at = strip_counts_at + strips * 4;
 
     // Each page's channel data: a flat, distinguishable value per strip.
-    let mut data = Vec::with_capacity(strips * plane_bytes);
+    let mut data = Vec::with_capacity(strips * strip_bytes);
     for page in 0..pages {
         for channel in 0..spec.channels {
             let value = ((page * spec.channels + channel) % 251) as u8;
-            data.extend(std::iter::repeat_n(value, plane_bytes));
+            for _ in 0..strips_per_channel {
+                data.extend(std::iter::repeat_n(value, strip_bytes));
+            }
         }
     }
 
@@ -233,7 +248,7 @@ pub fn build(spec: &LsmSpec) -> (Vec<u8>, LsmOffsets) {
     put_f64(&mut buf, cz_at + 40, 1e-7); // voxel size X (metres)
     put_f64(&mut buf, cz_at + 48, 1e-7); // voxel size Y (metres)
     put_f64(&mut buf, cz_at + 56, 1e-7); // voxel size Z (metres)
-    // A file with no channel-colours block states no pointer to one.
+                                         // A file with no channel-colours block states no pointer to one.
     let colors_offset = match &colors {
         Some(_) => colors_at as i32,
         None => 0,
@@ -252,12 +267,14 @@ pub fn build(spec: &LsmSpec) -> (Vec<u8>, LsmOffsets) {
     // --- The strip tables and the pixel data. ---
     for page in 0..pages {
         for channel in 0..spec.channels {
-            let strip = page * spec.channels + channel;
-            let at = data_at + strip * plane_bytes;
-            buf[strip_offsets_at + strip * 4..strip_offsets_at + strip * 4 + 4]
-                .copy_from_slice(&(at as u32).to_le_bytes());
-            buf[strip_counts_at + strip * 4..strip_counts_at + strip * 4 + 4]
-                .copy_from_slice(&(plane_bytes as u32).to_le_bytes());
+            for strip in 0..strips_per_channel {
+                let index = (page * spec.channels + channel) * strips_per_channel + strip;
+                let at = data_at + index * strip_bytes;
+                buf[strip_offsets_at + index * 4..strip_offsets_at + index * 4 + 4]
+                    .copy_from_slice(&(at as u32).to_le_bytes());
+                buf[strip_counts_at + index * 4..strip_counts_at + index * 4 + 4]
+                    .copy_from_slice(&(strip_bytes as u32).to_le_bytes());
+            }
         }
     }
     buf[data_at..].copy_from_slice(&data);
@@ -277,31 +294,27 @@ pub fn build(spec: &LsmSpec) -> (Vec<u8>, LsmOffsets) {
         if page == 0 {
             // The CZ-LSM-Info struct: type 7 (undefined), so the value field
             // is a pointer to the struct, not the struct itself.
-            entries.extend(ifd_entry(
-                34412,
-                7,
-                spec.cz_bytes as u32,
-                cz_at as u32,
-            ));
+            entries.extend(ifd_entry(34412, 7, spec.cz_bytes as u32, cz_at as u32));
         }
-        // The strip tables: with one channel the single value is inline, with
-        // more it is a pointer to the external array.
-        let first = page * spec.channels;
-        if spec.channels == 1 {
-            let at = data_at + first * plane_bytes;
+        // The strip tables: with ONE strip in the file the single value is
+        // inline, with more it is a pointer to the external array.
+        let first = page * spec.channels * strips_per_channel;
+        let count = (spec.channels * strips_per_channel) as u32;
+        if count == 1 {
+            let at = data_at + first * strip_bytes;
             entries.extend(ifd_entry(273, 4, 1, at as u32)); // StripOffsets
-            entries.extend(ifd_entry(279, 4, 1, plane_bytes as u32)); // StripByteCounts
+            entries.extend(ifd_entry(279, 4, 1, strip_bytes as u32)); // StripByteCounts
         } else {
             entries.extend(ifd_entry(
                 273,
                 4,
-                spec.channels as u32,
+                count,
                 (strip_offsets_at + first * 4) as u32,
             ));
             entries.extend(ifd_entry(
                 279,
                 4,
-                spec.channels as u32,
+                count,
                 (strip_counts_at + first * 4) as u32,
             ));
         }
@@ -323,8 +336,26 @@ pub fn build(spec: &LsmSpec) -> (Vec<u8>, LsmOffsets) {
     let offsets = LsmOffsets {
         cz: cz_at,
         colors: colors.as_ref().map(|_| colors_at),
+        data: data_at,
     };
     (buf, offsets)
+}
+
+/// The file offset of an IFD entry's value field, by tag, in the page's IFD.
+///
+/// WHY: a test that patches a file must find the entry it changes, and the
+/// order of the entries is the writer's business, not the test's.
+pub fn ifd_entry_value(bytes: &[u8], page: usize, tag: u16) -> Option<usize> {
+    let ifd_at = 8 + page * (2 + 11 * 12 + 4);
+    let count = u16::from_le_bytes(bytes.get(ifd_at..ifd_at + 2)?.try_into().ok()?) as usize;
+    for index in 0..count {
+        let entry = ifd_at + 2 + index * 12;
+        let entry_tag = u16::from_le_bytes(bytes.get(entry..entry + 2)?.try_into().ok()?);
+        if entry_tag == tag {
+            return Some(entry + 8);
+        }
+    }
+    None
 }
 
 /// Write a synthetic LSM file to `path`.

@@ -79,13 +79,7 @@ impl Dims5 {
     /// and a Bgr48/RGB48 plane is `(U16, samples=3)`. Call this BEFORE reserving
     /// any memory.
     pub fn checked_plane_bytes_samples(&self, dtype: DType, samples: u32) -> Result<usize> {
-        let bytes = self
-            .x
-            .checked_mul(self.y)
-            .and_then(|elems| elems.checked_mul(samples as usize))
-            .and_then(|elems| elems.checked_mul(dtype.size_bytes()));
-
-        match bytes {
+        match self.plane_bytes(dtype, samples) {
             // Overflow: report the cap and a saturated request so callers/logs
             // see it as an oversize refusal rather than a panic.
             None => Err(Error::OversizedAllocation {
@@ -100,6 +94,50 @@ impl Dims5 {
             }
             Some(b) => Ok(b),
         }
+    }
+
+    /// Byte size of one 2-D plane (`x * y * dtype.size_bytes()`), refusing it
+    /// ONLY if the product overflows `usize` — the decode ceiling is NOT
+    /// applied.
+    ///
+    /// WHY: the ceiling guards ONE materialisation, not a scene's existence.
+    /// A reader that serves a plane window by window
+    /// ([`ImageReader::region`]) must know the plane's size to lay out its
+    /// rows even for a plane it will never materialise, so it sizes the plane
+    /// HERE and applies the ceiling where the plane is materialised
+    /// ([`ImageReader::plane`]). That is what lets the CZI, LIF and ND2
+    /// readers PUBLISH a scene whose plane is over the ceiling: `plane()`
+    /// refuses the materialisation, `region()` serves the windows.
+    ///
+    /// The LSM reader serves the windows of any file whose strips hold whole
+    /// rows, so it publishes such a scene too. The TIFF reader does it for a
+    /// page its window path can serve — an UNCOMPRESSED page, whose window's
+    /// bytes are copied out of the file, or a COMPRESSED page whose chunks
+    /// are small enough next to the plane. A TIFF page whose chunks ARE the
+    /// plane keeps the default path, so its scene is published but its plane
+    /// is not readable — and a file that holds such a page reports
+    /// `supports_region() == false`.
+    ///
+    /// Call [`checked_plane_bytes`](Dims5::checked_plane_bytes) instead when
+    /// the plane really is about to be allocated.
+    pub fn plane_bytes_no_ceiling(&self, dtype: DType) -> Result<usize> {
+        match self.plane_bytes(dtype, 1) {
+            None => Err(Error::OversizedAllocation {
+                requested: usize::MAX,
+                cap: crate::guard::MAX_DECODED_PLANE_BYTES,
+            }),
+            Some(b) => Ok(b),
+        }
+    }
+
+    /// Byte size of one 2-D plane carrying `samples` interleaved samples per
+    /// pixel, or `None` if the product overflows `usize`. No ceiling: see
+    /// [`plane_bytes_no_ceiling`](Dims5::plane_bytes_no_ceiling).
+    fn plane_bytes(&self, dtype: DType, samples: u32) -> Option<usize> {
+        self.x
+            .checked_mul(self.y)
+            .and_then(|elems| elems.checked_mul(samples as usize))
+            .and_then(|elems| elems.checked_mul(dtype.size_bytes()))
     }
 
     /// Flat plane index for a `(t, c, z)` coordinate in canonical order,
@@ -197,6 +235,19 @@ pub enum Endian {
     Big,
 }
 
+/// The byte order of the host this code runs on.
+///
+/// WHY it exists: [`PlaneBuf::from_bytes`] reads raw bytes in a NAMED order,
+/// so bytes that are ALREADY native are read with the host's own order and
+/// come out untouched — one decoder, no second copy of it.
+pub(crate) fn host_endian() -> Endian {
+    if cfg!(target_endian = "little") {
+        Endian::Little
+    } else {
+        Endian::Big
+    }
+}
+
 /// Owned, native-endian pixel buffer, one variant per [`DType`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlaneBuf {
@@ -292,6 +343,20 @@ impl PlaneBuf {
                 PlaneBuf::F32(out)
             }
         })
+    }
+
+    /// Build a buffer from bytes that are ALREADY in the host's byte order.
+    ///
+    /// WHY: a decoder that produces native-endian samples (the `tiff` crate
+    /// does) must not be byteswapped again, and `from_bytes` always reads the
+    /// bytes in a NAMED order. This reads them in the HOST's order, which is
+    /// the one order `from_bytes` does not swap on this host — so there is
+    /// ONE decoder, not two copies of it.
+    ///
+    /// Errors with [`Error::Decode`] if `raw.len()` is not an exact multiple of
+    /// `dtype.size_bytes()`.
+    pub(crate) fn from_native_bytes(dtype: DType, raw: &[u8]) -> Result<PlaneBuf> {
+        Self::from_bytes(dtype, host_endian(), raw)
     }
 }
 
@@ -666,11 +731,11 @@ pub trait ImageReader: Send + Sync {
     fn plane(&self, scene: usize, t: usize, c: usize, z: usize) -> Result<Plane>;
 
     /// True if this reader implements [`region`](Self::region) as a genuine
-    /// out-of-core sub-region decode (only CZI today). Readers that fall back to
-    /// the default [`region`](Self::region) (which decodes the whole plane then
-    /// crops) return `false`, so a caller doing many sub-region reads of one
-    /// plane can decode the plane ONCE and crop in memory instead of re-decoding
-    /// per tile.
+    /// out-of-core sub-region decode. The CZI, LIF, ND2, TIFF and LSM readers
+    /// do; readers that fall back to the default [`region`](Self::region)
+    /// (which decodes the whole plane then crops) return `false`, so a caller
+    /// doing many sub-region reads of one plane can decode the plane ONCE and
+    /// crop in memory instead of re-decoding per tile.
     fn supports_region(&self) -> bool {
         false
     }
@@ -686,7 +751,9 @@ pub trait ImageReader: Send + Sync {
     /// SHOULD override this method — the whole point being to avoid decoding
     /// pixels outside `rect`, which matters for whole-slide scenes whose full
     /// plane may itself be refused by [`crate::guard::MAX_DECODED_PLANE_BYTES`]
-    /// (the CZI reader overrides this: `CziReader::region`).
+    /// (the CZI, LIF, ND2, TIFF and LSM readers override this:
+    /// `CziReader::region`, `LifReader::region`, `Nd2Reader::region`,
+    /// `TiffReader::region`, `LsmReader::region`).
     ///
     /// Validates the coordinate FIRST, then `rect`, matching an overriding
     /// backend's order (e.g. `CziReader::region`) so a doubly-invalid call
@@ -694,40 +761,80 @@ pub trait ImageReader: Send + Sync {
     /// out of range for [`scene_meta`](Self::scene_meta)'s `dims`, otherwise
     /// [`Error::Decode`] if `rect.x + rect.w > dims.x` or `rect.y + rect.h >
     /// dims.y` (checked adds; an overflowing `x + w` / `y + h` is also
-    /// rejected rather than wrapping).
+    /// rejected rather than wrapping). Every reader runs the SAME check, in
+    /// the SAME order, through [`checked_region`].
     fn region(&self, scene: usize, t: usize, c: usize, z: usize, rect: PixelRect) -> Result<Plane> {
         let dims = self.scene_meta(scene)?.dims;
-
-        // Validate `(t, c, z)` BEFORE `rect`, matching `CziReader::region`'s
-        // `scene_checked`-first order. Without this the default deferred coord
-        // validation to the inner `plane()`, so a call that was invalid on BOTH
-        // the coordinate AND the rect returned `Decode` (rect) here but
-        // `OutOfRange` from the CZI override — an order-inconsistent contract.
-        if t >= dims.t || c >= dims.c || z >= dims.z {
-            return Err(Error::OutOfRange { scene, t, c, z });
-        }
-
-        let x_end = rect.x.checked_add(rect.w).ok_or_else(|| {
-            Error::Decode(format!(
-                "region rect x+w overflows usize (x={}, w={})",
-                rect.x, rect.w
-            ))
-        })?;
-        let y_end = rect.y.checked_add(rect.h).ok_or_else(|| {
-            Error::Decode(format!(
-                "region rect y+h overflows usize (y={}, h={})",
-                rect.y, rect.h
-            ))
-        })?;
-        if x_end > dims.x || y_end > dims.y {
-            return Err(Error::Decode(format!(
-                "region rect {{x:{}, y:{}, w:{}, h:{}}} out of range for scene {} dims (x:{}, y:{})",
-                rect.x, rect.y, rect.w, rect.h, scene, dims.x, dims.y
-            )));
-        }
-
+        checked_region("region", &dims, scene, t, c, z, rect)?;
         self.plane(scene, t, c, z)?.crop(rect)
     }
+}
+
+/// Validate a region read's coordinate and rectangle, in the order every
+/// reader uses: the COORDINATE first, then the rectangle.
+///
+/// `label` names the reader in the message ("CZI region", "LIF region", "ND2
+/// region", "TIFF region", "LSM region", or "region" for the trait default),
+/// so the wording is the same everywhere and only the name differs.
+///
+/// WHY one helper: the validation ORDER is part of the reader contract — a
+/// call that is wrong in BOTH ways must report the same error everywhere, or
+/// a caller cannot tell which of its arguments is at fault. Four copies of
+/// this block would drift apart.
+pub(crate) fn checked_region(
+    label: &str,
+    dims: &Dims5,
+    scene: usize,
+    t: usize,
+    c: usize,
+    z: usize,
+    rect: PixelRect,
+) -> Result<()> {
+    if t >= dims.t || c >= dims.c || z >= dims.z {
+        return Err(Error::OutOfRange { scene, t, c, z });
+    }
+
+    let x_end = rect.x.checked_add(rect.w).ok_or_else(|| {
+        Error::Decode(format!(
+            "{label} rect x+w overflows usize (x={}, w={})",
+            rect.x, rect.w
+        ))
+    })?;
+    let y_end = rect.y.checked_add(rect.h).ok_or_else(|| {
+        Error::Decode(format!(
+            "{label} rect y+h overflows usize (y={}, h={})",
+            rect.y, rect.h
+        ))
+    })?;
+    if x_end > dims.x || y_end > dims.y {
+        return Err(Error::Decode(format!(
+            "{label} rect {{x:{}, y:{}, w:{}, h:{}}} out of range for scene {} dims (x:{}, y:{})",
+            rect.x, rect.y, rect.w, rect.h, scene, dims.x, dims.y
+        )));
+    }
+
+    Ok(())
+}
+
+/// The plane a region read of an EMPTY rectangle returns.
+///
+/// WHY it exists: the trait's default `region()` returns
+/// `plane()?.crop(rect)`, and `Plane::crop` of an empty rectangle is an empty
+/// plane of shape `[rect.h, rect.w]` — so every reader's own path must return
+/// the same thing for the same call. A rectangle with no pixels has no rows,
+/// and a reader that counts the rows it covers can underflow on `rect.h - 1`,
+/// so the empty case is settled ONCE, here, before any reader starts
+/// counting.
+///
+/// `samples` is the plane's samples per pixel; the empty plane keeps it.
+pub(crate) fn empty_region_plane(dtype: DType, samples: u32, rect: PixelRect) -> Result<Plane> {
+    let data = match dtype {
+        DType::U8 => PlaneBuf::U8(Vec::new()),
+        DType::U16 => PlaneBuf::U16(Vec::new()),
+        DType::I16 => PlaneBuf::I16(Vec::new()),
+        DType::F32 => PlaneBuf::F32(Vec::new()),
+    };
+    Plane::new_samples(data, [rect.h, rect.w], samples)
 }
 
 #[cfg(test)]
