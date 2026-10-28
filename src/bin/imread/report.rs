@@ -12,7 +12,8 @@
 use std::path::Path;
 use std::time::Instant;
 
-use phasit_imread::{Error, ImageReader, SceneMeta};
+use phasit_imread::types::PixelRect;
+use phasit_imread::{Dims5, Error, ImageReader, Plane, SceneMeta};
 
 use super::json;
 use super::plane;
@@ -38,7 +39,12 @@ const REFUSAL_OPENINGS: [&str; 3] = [
 ];
 
 /// One file, as one JSON line.
-pub fn file_report(path: &Path) -> String {
+///
+/// `regions` says whether each window the reader serves is compared with the
+/// same window cropped out of the whole plane. The comparison is ON by
+/// default; a timing run turns it OFF, so that two builds do exactly the
+/// same work per file.
+pub fn file_report(path: &Path, regions: bool) -> String {
     let format = match phasit_imread::detect_format(path) {
         Ok(format) => format!("{format:?}"),
         Err(error) => return failed_report(path, None, &error),
@@ -59,9 +65,8 @@ pub fn file_report(path: &Path) -> String {
 
     let mut planes = Vec::new();
     for (index, scene) in meta.scenes.iter().enumerate() {
-        planes.extend(plane_reports(index, reader.as_ref(), scene));
+        planes.extend(plane_reports(index, reader.as_ref(), scene, regions));
     }
-
     let refused = reader
         .refused_scenes()
         .iter()
@@ -77,10 +82,12 @@ pub fn file_report(path: &Path) -> String {
 
     format!(
         "{{\"path\":{},\"format\":{},\"status\":\"{OPENED}\",\"error\":null,\"open_ms\":{},\
+         \"supports_region\":{},\
          \"scene_count\":{},\"scenes\":[{}],\"refused_scenes\":[{}],\"planes\":[{}]}}",
         json::string(&path.to_string_lossy()),
         json::string(&format),
         json::number(open_ms),
+        reader.supports_region(),
         json::integer(meta.scenes.len()),
         scenes.join(","),
         refused.join(","),
@@ -100,6 +107,7 @@ fn failed_report(path: &Path, format: Option<&str>, error: &Error) -> String {
     format!(
         "{{\"path\":{},\"format\":{},\"status\":\"{status}\",\
          \"error\":{{\"kind\":\"{kind}\",\"message\":{}}},\"open_ms\":null,\
+         \"supports_region\":false,\
          \"scene_count\":0,\"scenes\":[],\"refused_scenes\":[{}],\"planes\":[]}}",
         json::string(&path.to_string_lossy()),
         match format {
@@ -166,11 +174,16 @@ fn scene_json(index: usize, file_index: usize, scene: &SceneMeta) -> String {
 /// planes per channel, whatever the depth of the scene is. A plane the reader
 /// refuses is a result, not a failure — it is reported with its reason and the
 /// rest of the file is still reported.
-fn plane_reports(scene_index: usize, reader: &dyn ImageReader, scene: &SceneMeta) -> Vec<String> {
+fn plane_reports(
+    scene_index: usize,
+    reader: &dyn ImageReader,
+    scene: &SceneMeta,
+    regions: bool,
+) -> Vec<String> {
     let mut reports = Vec::new();
     for z in sweep_z_positions(scene.dims.z) {
         for c in 0..scene.dims.c {
-            reports.push(plane_report(scene_index, reader, c, z));
+            reports.push(plane_report(scene_index, reader, scene, c, z, regions));
         }
     }
     reports
@@ -186,7 +199,14 @@ fn sweep_z_positions(z_count: usize) -> Vec<usize> {
 }
 
 /// One decoded plane: its statistics, its hash, and how long it took.
-fn plane_report(scene_index: usize, reader: &dyn ImageReader, c: usize, z: usize) -> String {
+fn plane_report(
+    scene_index: usize,
+    reader: &dyn ImageReader,
+    scene: &SceneMeta,
+    c: usize,
+    z: usize,
+    regions: bool,
+) -> String {
     let started = Instant::now();
     let outcome = reader.plane(scene_index, 0, c, z);
     let decode_ms = elapsed_ms(started);
@@ -195,10 +215,15 @@ fn plane_report(scene_index: usize, reader: &dyn ImageReader, c: usize, z: usize
         Ok(plane) => {
             let bytes = plane::to_ne_bytes(&plane.data);
             let stats = plane::statistics(&plane.data);
+            let windows = if regions {
+                region_reports(reader, scene_index, scene, c, z, &plane)
+            } else {
+                Vec::new()
+            };
             format!(
                 "{{\"scene\":{},\"t\":0,\"c\":{},\"z\":{},\"dtype\":\"{:?}\",\"samples\":{},\
                  \"bytes\":{},\"min\":{},\"max\":{},\"mean\":{},\"sha256\":\"{}\",\
-                 \"decode_ms\":{},\"error\":null}}",
+                 \"decode_ms\":{},\"regions\":[{}],\"error\":null}}",
                 json::integer(scene_index),
                 json::integer(c),
                 json::integer(z),
@@ -210,16 +235,100 @@ fn plane_report(scene_index: usize, reader: &dyn ImageReader, c: usize, z: usize
                 json::number(stats.mean),
                 sha256::sha256_hex(&bytes),
                 json::number(decode_ms),
+                windows.join(","),
             )
         }
         Err(error) => format!(
             "{{\"scene\":{},\"t\":0,\"c\":{},\"z\":{},\"dtype\":null,\"samples\":null,\
              \"bytes\":null,\"min\":null,\"max\":null,\"mean\":null,\"sha256\":null,\
-             \"decode_ms\":{},\"error\":{{\"kind\":\"{}\",\"message\":{}}}}}",
+             \"decode_ms\":{},\"regions\":[],\"error\":{{\"kind\":\"{}\",\"message\":{}}}}}",
             json::integer(scene_index),
             json::integer(c),
             json::integer(z),
             json::number(decode_ms),
+            error_kind(&error),
+            json::string(&error.to_string()),
+        ),
+    }
+}
+
+/// The windows the sweep reads of one plane.
+///
+/// Three windows per plane: a quarter at the origin, a quarter in the middle,
+/// and the last pixel. They are the windows a pyramid asks for, and the
+/// middle one falls on no chunk boundary in general.
+fn sweep_rects(dims: &Dims5) -> Vec<PixelRect> {
+    let (w, h) = (dims.x, dims.y);
+    if w == 0 || h == 0 {
+        return Vec::new();
+    }
+    let half_w = (w / 2).max(1);
+    let half_h = (h / 2).max(1);
+    vec![
+        PixelRect::new(0, 0, half_w, half_h),
+        PixelRect::new(w / 4, h / 4, half_w, half_h),
+        PixelRect::new(w - 1, h - 1, 1, 1),
+    ]
+}
+
+/// The windows the sweep reads of one plane, each compared with the same
+/// window cropped out of the plane.
+///
+/// A window the reader refuses is a result, not a failure: it is reported with
+/// its reason. Only hashes are recorded — never pixels.
+fn region_reports(
+    reader: &dyn ImageReader,
+    scene_index: usize,
+    scene: &SceneMeta,
+    c: usize,
+    z: usize,
+    plane: &Plane,
+) -> Vec<String> {
+    sweep_rects(&scene.dims)
+        .into_iter()
+        .map(|rect| region_report(reader, scene_index, c, z, rect, plane))
+        .collect()
+}
+
+/// One window: the region the reader gave, and the same window cropped out of
+/// the whole plane, each as a hash.
+fn region_report(
+    reader: &dyn ImageReader,
+    scene_index: usize,
+    c: usize,
+    z: usize,
+    rect: PixelRect,
+    plane: &Plane,
+) -> String {
+    let rect_json = format!(
+        "[{},{},{},{}]",
+        json::integer(rect.x),
+        json::integer(rect.y),
+        json::integer(rect.w),
+        json::integer(rect.h)
+    );
+    match (reader.region(scene_index, 0, c, z, rect), plane.crop(rect)) {
+        (Ok(region), Ok(cropped)) => {
+            let region_bytes = plane::to_ne_bytes(&region.data);
+            let cropped_bytes = plane::to_ne_bytes(&cropped.data);
+            let same = region_bytes == cropped_bytes;
+            format!(
+                "{{\"rect\":{rect_json},\"region_sha256\":{},\"crop_sha256\":{},\
+                 \"same\":{},\"error\":null}}",
+                json::string(&sha256::sha256_hex(&region_bytes)),
+                json::string(&sha256::sha256_hex(&cropped_bytes)),
+                same,
+            )
+        }
+        (Err(error), _) => format!(
+            "{{\"rect\":{rect_json},\"region_sha256\":null,\"crop_sha256\":null,\
+             \"same\":null,\"error\":{{\"kind\":\"{}\",\"message\":{}}}}}",
+            error_kind(&error),
+            json::string(&error.to_string()),
+        ),
+        (_, Err(error)) => format!(
+            "{{\"rect\":{rect_json},\"region_sha256\":null,\"crop_sha256\":null,\
+             \"same\":null,\"error\":{{\"kind\":\"{}\",\"message\":{}}}}}",
             error_kind(&error),
             json::string(&error.to_string()),
         ),

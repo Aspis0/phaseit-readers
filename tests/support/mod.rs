@@ -7,8 +7,13 @@
 #![allow(dead_code)]
 
 pub mod czi;
+pub mod lif;
 pub mod lsm;
+pub mod nd2;
 pub mod scratch;
+pub mod tiff_layout;
+pub mod tiff_page;
+pub mod tiff_striped;
 
 use std::fs::{self, File};
 use std::path::Path;

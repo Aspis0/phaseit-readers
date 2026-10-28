@@ -34,6 +34,7 @@ fn three_channels() -> LsmSpec {
             "Ch2 GaAsP".to_string(),
         ],
         pages: None,
+        strips_per_channel: 1,
         cz_bytes: 464,
     }
 }

@@ -54,6 +54,11 @@ enum Command {
     },
     Sweep {
         list: PathBuf,
+        /// Whether the sweep compares each window with the same window
+        /// cropped out of the whole plane. The comparison is ON by default;
+        /// a timing run turns it OFF, so that two builds do exactly the same
+        /// work per file.
+        regions: bool,
     },
 }
 
@@ -62,7 +67,7 @@ fn usage_text() -> String {
     format!(
         "imread (phasit-imread {})\n\nusage:\n  imread info <file>\n  \
          imread dump <file> <scene> <t> <c> <z> <out>\n  \
-         imread json <file>\n  imread sweep --json <listfile>\n",
+         imread json <file>\n  imread sweep --json [--no-regions] <listfile>\n",
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -83,6 +88,15 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         [sub, flag, list] if sub == "sweep" && flag == "--json" => {
             Ok(Command::Sweep {
                 list: PathBuf::from(list),
+                regions: true,
+            })
+        }
+        [sub, flag, no_regions, list]
+            if sub == "sweep" && flag == "--json" && no_regions == "--no-regions" =>
+        {
+            Ok(Command::Sweep {
+                list: PathBuf::from(list),
+                regions: false,
             })
         }
         [sub, file, scene, t, c, z, out] if sub == "dump" => {
@@ -110,11 +124,11 @@ fn run(cmd: Command) -> ImreadResult<()> {
         Command::Info { file } => run_info(&file),
         Command::Dump { file, scene, t, c, z, out } => run_dump(&file, scene, t, c, z, &out),
         Command::Json { file } => {
-            println!("{}", batch::guarded_report(&file));
+            println!("{}", batch::guarded_report(&file, true));
             Ok(())
         }
-        Command::Sweep { list } => {
-            batch::run(&list)?;
+        Command::Sweep { list, regions } => {
+            batch::run(&list, regions)?;
             Ok(())
         }
     }
@@ -307,7 +321,24 @@ mod tests {
     fn sweep_parses_with_its_json_flag() {
         let cmd = parse_args(&args(&["sweep", "--json", "list.txt"])).unwrap();
         match cmd {
-            Command::Sweep { list } => assert_eq!(list, PathBuf::from("list.txt")),
+            Command::Sweep { list, regions } => {
+                assert_eq!(list, PathBuf::from("list.txt"));
+                assert!(regions, "the window comparison is on by default");
+            }
+            _ => panic!("expected Sweep"),
+        }
+    }
+
+    #[test]
+    fn sweep_can_skip_the_window_comparison() {
+        // The timing runs compare two builds, so they must do the SAME work
+        // per file: the comparison is turned off for them.
+        let cmd = parse_args(&args(&["sweep", "--json", "--no-regions", "list.txt"])).unwrap();
+        match cmd {
+            Command::Sweep { list, regions } => {
+                assert_eq!(list, PathBuf::from("list.txt"));
+                assert!(!regions, "the window comparison is off when it is asked for");
+            }
             _ => panic!("expected Sweep"),
         }
     }

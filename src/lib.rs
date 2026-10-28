@@ -42,14 +42,19 @@ mod lsm_bytes;
 mod lsm_channel_colors;
 mod lsm_cz_info;
 mod lsm_positions;
+mod lsm_region;
+mod rows;
 mod tiff_imagej;
+mod tiff_layout;
 mod tiff_ome;
 mod tiff_ome_geometry;
 mod tiff_ome_planes;
 mod tiff_ome_scene;
 mod tiff_page;
+mod tiff_pages;
 mod tiff_palette;
 mod tiff_plain;
+mod tiff_region;
 mod tiff_tags;
 
 // The real-file gate the tests share, INCLUDED rather than copied: the

@@ -15,7 +15,12 @@ use super::json;
 use super::report;
 
 /// Report every path of the list file, one JSON line each.
-pub fn run(list_path: &Path) -> std::io::Result<()> {
+///
+/// `regions` says whether each window the sweep reads is compared with the
+/// same window cropped out of the whole plane. The comparison is ON by
+/// default; a timing run turns it OFF, so that two builds do exactly the
+/// same work per file and their open times can be compared.
+pub fn run(list_path: &Path, regions: bool) -> std::io::Result<()> {
     let list = std::fs::File::open(list_path)?;
     let stdout = std::io::stdout();
     let mut out = BufWriter::new(stdout.lock());
@@ -25,7 +30,7 @@ pub fn run(list_path: &Path) -> std::io::Result<()> {
         if path.is_empty() {
             continue;
         }
-        writeln!(out, "{}", guarded_report(Path::new(path)))?;
+        writeln!(out, "{}", guarded_report(Path::new(path), regions))?;
     }
     out.flush()
 }
@@ -34,8 +39,8 @@ pub fn run(list_path: &Path) -> std::io::Result<()> {
 ///
 /// The guard is the binary's half of the per-file isolation: a reader that
 /// panics on one file must not take the run down with it.
-pub fn guarded_report(path: &Path) -> String {
-    match catch_unwind(AssertUnwindSafe(|| report::file_report(path))) {
+pub fn guarded_report(path: &Path, regions: bool) -> String {
+    match catch_unwind(AssertUnwindSafe(|| report::file_report(path, regions))) {
         Ok(line) => line,
         Err(payload) => panic_report(path, payload.as_ref()),
     }

@@ -29,6 +29,12 @@
 //! then `Y*X*itemsize` contiguous bytes are read there. This was validated
 //! bit-exact against liffile on the reference samples (see `tests/lif_real.rs`).
 //!
+//! Because the frame is contiguous, a SUB-REGION of a plane can be read
+//! without decoding the whole plane: `region()` reads only the rows the
+//! rectangle covers (one read per row, or one read for a full-width
+//! rectangle, whose rows are contiguous). The result is byte-identical to
+//! cropping the whole plane.
+//!
 //! Color convention: channels are the `ChannelDescription` list, i.e. color maps
 //! onto `dims.c` and `SceneMeta::samples` is always `1`. Interleaved
 //! multi-sample planes (`samples > 1`) are a CZI-only convention; see
@@ -40,12 +46,19 @@
 //! (so a frame is not contiguous), whose dtype we do not model, whose numeric
 //! attributes are missing or malformed, whose dimension list is ambiguous (a
 //! duplicate `DimID`, a modelled axis with no elements), whose declared size
-//! overflows the reader's byte arithmetic or exceeds its cap, or whose data
-//! block does not hold its whole frame, is **refused** rather than decoded
-//! wrongly: the reason is named and the image keeps its place in the file's
-//! own list of images, so the images after it are not renumbered. The open
-//! fails only when no image of the file can be read at all — and then the
-//! error names every refusal with its own reason.
+//! overflows the reader's byte arithmetic, or whose data block does not hold
+//! its whole frame, is **refused** rather than decoded wrongly: the reason is
+//! named and the image keeps its place in the file's own list of images, so
+//! the images after it are not renumbered. The open fails only when no image
+//! of the file can be read at all — and then the error names every refusal
+//! with its own reason.
+//!
+//! An image whose plane is over the decode ceiling
+//! ([`MAX_DECODED_PLANE_BYTES`](crate::guard::MAX_DECODED_PLANE_BYTES)) is
+//! NOT refused: the ceiling guards ONE materialisation, not the image's
+//! existence. The image is published, `plane()` refuses the materialisation
+//! with [`Error::OversizedAllocation`], and `region()` serves windows of it —
+//! exactly as the CZI reader does for a whole-slide scene.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -58,8 +71,8 @@ use crate::calibration::Calibration;
 use crate::error::{Error, Result};
 use crate::io::map_file;
 use crate::types::{
-    ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, RefusedScene,
-    SceneMeta,
+    checked_region, empty_region_plane, ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader,
+    PixelRect, Plane, PlaneBuf, RefusedScene, SceneMeta,
 };
 
 /// LIF `DimID` values we map to canonical axes. Anything else (emission λ,
@@ -90,8 +103,9 @@ struct SceneLayout {
     dtype: DType,
     /// Absolute file offset of the owning memory block's data.
     block_offset: usize,
-    /// Byte length of the owning memory block's data.
-    block_size: usize,
+    /// Absolute file offset one past the end of the owning memory block's
+    /// data. Computed once at `open()`, so a row read does not recompute it.
+    block_end: usize,
     /// Stride in bytes for one step along T (0 when there is no T dimension).
     t_bytes_inc: usize,
     /// Stride in bytes for one step along Z (0 when there is no Z dimension).
@@ -99,6 +113,24 @@ struct SceneLayout {
     /// Byte offset of each channel within a `(t,z)` slab, indexed by canonical
     /// channel `c`. Sorted ascending (liffile's channel order); `len == dims.c`.
     channel_bytes_inc: Vec<usize>,
+    /// Byte stride of one image row (`dims.x * itemsize`). The reader refuses
+    /// an image whose X or Y dimension is not contiguous, so a frame's rows
+    /// are packed: this is the offset of row `y` inside the frame.
+    row_stride: usize,
+}
+
+impl SceneLayout {
+    /// Byte offset of the frame `(t, c, z)` inside the owning memory block:
+    /// `t*T.BytesInc + z*Z.BytesInc + channel[c].BytesInc` (all checked).
+    ///
+    /// The caller has already validated `t`/`c`/`z` against `dims`, so the
+    /// channel index is in range.
+    fn plane_offset(&self, t: usize, c: usize, z: usize) -> Result<usize> {
+        t.checked_mul(self.t_bytes_inc)
+            .and_then(|v| v.checked_add(z.checked_mul(self.z_bytes_inc)?))
+            .and_then(|v| v.checked_add(self.channel_bytes_inc[c]))
+            .ok_or_else(|| Error::Decode("LIF plane offset overflow".to_string()))
+    }
 }
 
 /// Leica LIF reader. `Mmap` is `Send + Sync` and every other field is plain
@@ -245,6 +277,12 @@ impl ImageReader for LifReader {
         self.file_indices.get(scene).copied().unwrap_or(scene)
     }
 
+    /// Decode the whole plane of `(scene, t, c, z)`.
+    ///
+    /// A plane whose byte size is over the decode ceiling is REFUSED here
+    /// with [`Error::OversizedAllocation`]: the ceiling guards what is
+    /// materialised. The image itself stays published — [`region`](Self::region)
+    /// serves windows of it.
     fn plane(&self, scene: usize, t: usize, c: usize, z: usize) -> Result<Plane> {
         // Bad scene index is SceneOutOfRange; bad (t,c,z) is OutOfRange.
         let layout = self.layouts.get(scene).ok_or(Error::SceneOutOfRange {
@@ -256,15 +294,13 @@ impl ImageReader for LifReader {
             return Err(Error::OutOfRange { scene, t, c, z });
         }
 
-        // Size the OUTPUT plane BEFORE reserving/reading anything.
+        // Size the OUTPUT plane BEFORE reserving/reading anything. This is
+        // where the decode ceiling applies: a plane over it is refused, while
+        // the image stays readable through `region()`.
         let frame_bytes = d.checked_plane_bytes(layout.dtype)?;
 
         // offset = t*T.BytesInc + z*Z.BytesInc + channel[c].BytesInc (all checked).
-        let offset = t
-            .checked_mul(layout.t_bytes_inc)
-            .and_then(|v| v.checked_add(z.checked_mul(layout.z_bytes_inc)?))
-            .and_then(|v| v.checked_add(layout.channel_bytes_inc[c]))
-            .ok_or_else(|| Error::Decode("LIF plane offset overflow".to_string()))?;
+        let offset = layout.plane_offset(t, c, z)?;
 
         let start = layout
             .block_offset
@@ -275,11 +311,7 @@ impl ImageReader for LifReader {
             .ok_or_else(|| Error::Decode("LIF plane end overflow".to_string()))?;
 
         // The frame must lie fully inside this image's memory block AND the file.
-        let block_end = layout
-            .block_offset
-            .checked_add(layout.block_size)
-            .ok_or_else(|| Error::Decode("LIF block end overflow".to_string()))?;
-        if end > block_end || end > self.mmap.len() {
+        if end > layout.block_end || end > self.mmap.len() {
             return Err(Error::Decode(format!(
                 "LIF plane (scene {scene} t{t} c{c} z{z}) spans [{start},{end}) past block/file bounds"
             )));
@@ -289,6 +321,127 @@ impl ImageReader for LifReader {
         let raw = &self.mmap[start..end];
         let data = PlaneBuf::from_bytes(layout.dtype, Endian::Little, raw)?;
         Plane::new(data, [d.y, d.x])
+    }
+
+    /// LIF stores its frames CONTIGUOUSLY (the reader refuses an image whose X
+    /// or Y dimension is not contiguous), so the rows of a sub-rectangle sit
+    /// at computable offsets inside the image's memory block and only those
+    /// rows are read — the whole plane is never decoded.
+    fn supports_region(&self) -> bool {
+        true
+    }
+
+    /// Read only the rows of `rect` out of the image's memory block.
+    ///
+    /// The result is byte-identical to `self.plane(scene, t, c, z)?.crop(rect)`:
+    /// the same little-endian bytes are converted to native endianness once,
+    /// over the rect alone. The output buffer is sized by the RECT, so the
+    /// decode ceiling applies to what is materialised, never to the full
+    /// plane — an image whose plane is over the ceiling is still readable
+    /// here, one window at a time.
+    fn region(
+        &self,
+        scene: usize,
+        t: usize,
+        c: usize,
+        z: usize,
+        rect: PixelRect,
+    ) -> Result<Plane> {
+        // Validate the coordinate FIRST, then the rect — the same order and
+        // the same wording as every other reader (the shared helper).
+        let layout = self.layouts.get(scene).ok_or(Error::SceneOutOfRange {
+            scene,
+            count: self.layouts.len(),
+        })?;
+        let d = layout.dims;
+        checked_region("LIF region", &d, scene, t, c, z, rect)?;
+
+        // An empty rectangle covers no pixels: the answer is an empty plane,
+        // the same one the trait's default returns.
+        if rect.is_empty() {
+            return empty_region_plane(layout.dtype, 1, rect);
+        }
+
+        // Size the OUTPUT by the RECT, never by the plane: the ceiling
+        // (`MAX_DECODED_PLANE_BYTES`) guards what is materialised, so a small
+        // window of a huge plane is not refused.
+        let rect_dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: rect.h,
+            x: rect.w,
+        };
+        let out_bytes = rect_dims.checked_plane_bytes(layout.dtype)?;
+
+        let itemsize = layout.dtype.size_bytes();
+        let row_bytes = rect
+            .w
+            .checked_mul(itemsize)
+            .ok_or_else(|| Error::Decode("LIF region row size overflow".to_string()))?;
+        let base = layout.plane_offset(t, c, z)?;
+
+        // Gather the rect's rows. A FULL-WIDTH rect is a contiguous span of
+        // rows (the frame is packed), so it is one read; a narrower rect is
+        // one read per row. `rect.x == 0` for a full-width rect (the rect
+        // check above leaves no room for a column offset), which is why the
+        // `rect.y` term below is the whole row offset.
+        let mut raw = Vec::with_capacity(out_bytes);
+        if rect.w == d.x {
+            let offset = base
+                .checked_add(
+                    rect.y
+                        .checked_mul(layout.row_stride)
+                        .ok_or_else(|| Error::Decode("LIF region row offset overflow".to_string()))?,
+                )
+                .ok_or_else(|| Error::Decode("LIF region offset overflow".to_string()))?;
+            let span = rect
+                .h
+                .checked_mul(layout.row_stride)
+                .ok_or_else(|| Error::Decode("LIF region span overflow".to_string()))?;
+            raw.extend_from_slice(self.block_bytes(layout, offset, span)?);
+        } else {
+            let col_offset = rect
+                .x
+                .checked_mul(itemsize)
+                .ok_or_else(|| Error::Decode("LIF region column offset overflow".to_string()))?;
+            for row in 0..rect.h {
+                let offset = base
+                    .checked_add(
+                        (rect.y + row)
+                            .checked_mul(layout.row_stride)
+                            .ok_or_else(|| Error::Decode("LIF region row offset overflow".to_string()))?,
+                    )
+                    .and_then(|v| v.checked_add(col_offset))
+                    .ok_or_else(|| Error::Decode("LIF region offset overflow".to_string()))?;
+                raw.extend_from_slice(self.block_bytes(layout, offset, row_bytes)?);
+            }
+        }
+
+        // Raw pixel bytes are little-endian; `from_bytes` byteswaps to native.
+        let data = PlaneBuf::from_bytes(layout.dtype, Endian::Little, &raw)?;
+        Plane::new(data, [rect.h, rect.w])
+    }
+}
+
+impl LifReader {
+    /// The `len` bytes of the image's memory block at `offset` (relative to
+    /// the block's start). Refuses a span that runs past the block or the
+    /// file — the same bound `plane()` enforces for a whole frame.
+    fn block_bytes(&self, layout: &SceneLayout, offset: usize, len: usize) -> Result<&[u8]> {
+        let start = layout
+            .block_offset
+            .checked_add(offset)
+            .ok_or_else(|| Error::Decode("LIF block span overflow".to_string()))?;
+        let end = start
+            .checked_add(len)
+            .ok_or_else(|| Error::Decode("LIF block span overflow".to_string()))?;
+        if end > layout.block_end || end > self.mmap.len() {
+            return Err(Error::Decode(format!(
+                "LIF span [{start},{end}) runs past the memory block or the file"
+            )));
+        }
+        Ok(&self.mmap[start..end])
     }
 }
 
@@ -473,14 +626,19 @@ fn build_scene(
         y: y.n,
         x: x.n,
     };
-    // Refuse absurd plane dimensions before we index any bytes. A plane the
-    // reader cannot size refuses THIS image, not the whole file.
-    let frame_bytes = match dims.checked_plane_bytes(dtype) {
+    // Size the frame WITHOUT the decode ceiling: the ceiling guards ONE
+    // materialisation, not the image's existence. An image whose plane is too
+    // big to hold in RAM is still PUBLISHED — `plane()` refuses the
+    // materialisation and `region()` serves windows of it — exactly as the
+    // CZI reader does for a whole-slide scene. Only an image whose size
+    // OVERFLOWS the reader's byte arithmetic is refused here, and it refuses
+    // THIS image, not the whole file.
+    let frame_bytes = match dims.plane_bytes_no_ceiling(dtype) {
         Ok(v) => v,
         Err(Error::OversizedAllocation { requested, cap }) => {
             return refuse(format!(
-                "the image states a plane of {requested} bytes, above the reader's cap of \
-                 {cap} bytes"
+                "the image states a plane of {requested} bytes, which overflows the reader's \
+                 byte arithmetic (its cap is {cap} bytes)"
             ))
         }
         Err(e) => return refuse(format!("the image states a plane the reader cannot size: {e}")),
@@ -615,10 +773,11 @@ fn build_scene(
         dims,
         dtype,
         block_offset,
-        block_size,
+        block_end,
         t_bytes_inc,
         z_bytes_inc,
         channel_bytes_inc,
+        row_stride,
     };
     ImageBuild::Scene(scene, layout)
 }

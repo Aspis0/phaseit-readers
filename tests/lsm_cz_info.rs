@@ -46,6 +46,7 @@ fn a_short_struct_states_no_tile_counts_and_no_channel_block() {
         channel_names: Some(vec!["Ch2 GaAsP".to_string()]),
         scan_info_names: vec!["Ch2 GaAsP".to_string()],
         pages: Some(1),
+        strips_per_channel: 1,
         cz_bytes: 108,
     };
     let (bytes, _) = build(&spec);

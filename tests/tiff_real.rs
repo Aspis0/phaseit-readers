@@ -59,7 +59,7 @@ fn rgb_tiff_geometry_and_planes() {
     // Out-of-range scene too.
     assert!(matches!(
         reader.plane(1, 0, 0, 0),
-        Err(Error::OutOfRange { scene: 1, .. })
+        Err(Error::SceneOutOfRange { scene: 1, .. })
     ));
 }
 

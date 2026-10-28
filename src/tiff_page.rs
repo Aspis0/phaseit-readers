@@ -51,20 +51,6 @@ pub(crate) fn read_page_facts(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<PageFa
     })
 }
 
-/// The number of pages (IFDs) in the file, walked from the first one. Leaves the
-/// decoder on the last page; a caller seeks to the page it reads.
-pub(crate) fn image_count(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<usize> {
-    dec.seek_to_image(0)
-        .map_err(|e| Error::Decode(format!("seek to IFD 0: {e}")))?;
-    let mut count = 1;
-    while dec.more_images() {
-        dec.next_image()
-            .map_err(|e| Error::Decode(format!("walk IFD chain: {e}")))?;
-        count += 1;
-    }
-    Ok(count)
-}
-
 impl PageFacts {
     /// Refuse the page unless it has the shape its scene states, naming the IFD.
     /// Equal byte counts are not enough: a page of 100x200 read as 200x100 is

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! What the LIF reader says about the images it could not read.
 //!
-//! The container is written by hand here (the reader's module docs spell the
-//! framing out): a header, the UTF-16LE metadata XML, then one memory block
-//! per image whose pixels live in this file. An image whose data block is
-//! absent — the ext-resident case, whose pixels live in the `.lifext`
-//! companion — cannot be decoded.
+//! The container is written by the shared writer in `tests/support/lif.rs`
+//! (the reader's module docs spell the framing out): a header, the UTF-16LE
+//! metadata XML, then one memory block per image whose pixels live in this
+//! file. An image whose data block is absent — the ext-resident case, whose
+//! pixels live in the `.lifext` companion — cannot be decoded.
 //!
 //! A reader that drops an image without saying so renumbers every image after
 //! it: the caller asking for image N of the file then gets a different one. So
@@ -14,117 +14,26 @@
 
 mod support;
 
-use std::path::Path;
-
 use phasit_imread::lif_reader::LifReader;
 use phasit_imread::{Error, ImageReader};
+use support::lif::{write_lif, LifImage};
 use support::scratch::lif_scratch;
 
-/// The `<Dimensions>` and `<Channels>` of a 4x2 gray image.
-const GRAY_BODY: &str = r#"
-          <Dimensions>
-            <DimensionDescription DimID="1" NumberOfElements="4" BytesInc="1" Length="0.000004"/>
-            <DimensionDescription DimID="2" NumberOfElements="2" BytesInc="4" Length="0.000002"/>
-          </Dimensions>
-          <Channels>
-            <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
-          </Channels>"#;
-
-/// One image of a synthetic LIF.
-struct ImageSpec {
-    /// The element's `Name` attribute.
-    name: &'static str,
-    /// The memory block the image names.
-    block_id: &'static str,
-    /// Whether that block's pixels are in this file. `false` is the
-    /// ext-resident case.
-    resident: bool,
-    /// The `<Dimensions>` and `<Channels>` of the image, as XML.
-    body: String,
-}
-
-impl ImageSpec {
-    /// An image with the standard 4x2 gray description.
-    fn gray(name: &'static str, block_id: &'static str, resident: bool) -> ImageSpec {
-        ImageSpec {
-            name,
-            block_id,
-            resident,
-            body: GRAY_BODY.to_string(),
-        }
-    }
-
-    /// An image with the standard description and a body of its own.
-    fn with_body(name: &'static str, block_id: &'static str, body: &str) -> ImageSpec {
-        ImageSpec {
-            name,
-            block_id,
-            resident: true,
-            body: body.to_string(),
-        }
+/// A 4x2 grayscale image of the fixture, whose pixels live in this file
+/// (`resident`) or in the `.lifext` companion (not `resident`).
+fn gray(name: &str, block_id: &str, resident: bool) -> LifImage {
+    let image = LifImage::gray8(name, block_id, 4, 2, None, None, 1);
+    if resident {
+        image
+    } else {
+        image.ext_resident()
     }
 }
 
-/// The XML of one image element: its description and the block it names.
-fn image_element(spec: &ImageSpec) -> String {
-    format!(
-        r#"  <Element Name="{name}" Type="Image">
-    <Data>
-      <Image>
-        <ImageDescription>{body}
-        </ImageDescription>
-      </Image>
-    </Data>
-    <Memory MemoryBlockID="{block}"/>
-  </Element>
-"#,
-        name = spec.name,
-        body = spec.body,
-        block = spec.block_id
-    )
-}
-
-/// Write a LIF whose images are `images`; the pixels of a resident image are
-/// one 4x2 gray frame.
-fn write_lif(path: &Path, images: &[ImageSpec]) {
-    const FRAME_BYTES: usize = 8; // 4 x 2 gray pixels
-
-    let mut xml = String::from(
-        r#"<?xml version="1.0" encoding="utf-8"?>
-<LMSDataContainerHeader Version="2">
-"#,
-    );
-    for spec in images {
-        xml.push_str(&image_element(spec));
-    }
-    xml.push_str("</LMSDataContainerHeader>\n");
-
-    let utf16: Vec<u16> = xml.encode_utf16().collect();
-    let mut buf: Vec<u8> = Vec::new();
-    buf.extend_from_slice(&0x70u32.to_le_bytes());
-    buf.extend_from_slice(&0u32.to_le_bytes()); // descSize (unused)
-    buf.push(0x2A);
-    buf.extend_from_slice(&(utf16.len() as u32).to_le_bytes());
-    for unit in &utf16 {
-        buf.extend_from_slice(&unit.to_le_bytes());
-    }
-
-    // One memory block per resident image.
-    for spec in images.iter().filter(|s| s.resident) {
-        let id: Vec<u16> = spec.block_id.encode_utf16().collect();
-        buf.extend_from_slice(&0x70u32.to_le_bytes());
-        buf.extend_from_slice(&0u32.to_le_bytes()); // descSize (unused)
-        buf.push(0x2A);
-        buf.extend_from_slice(&(FRAME_BYTES as u64).to_le_bytes());
-        buf.push(0x2A);
-        buf.extend_from_slice(&(id.len() as u32).to_le_bytes());
-        for unit in &id {
-            buf.extend_from_slice(&unit.to_le_bytes());
-        }
-        buf.extend(std::iter::repeat_n(0x11u8, FRAME_BYTES));
-    }
-
-    std::fs::write(path, &buf).expect("write the synthetic LIF");
+/// A 4x2 grayscale image whose `<Dimensions>`/`<Channels>` description is
+/// stated verbatim — the malformed, ambiguous and unmodelled cases.
+fn with_body(name: &str, block_id: &str, body: &str) -> LifImage {
+    LifImage::gray8(name, block_id, 4, 2, None, None, 1).with_body(body)
 }
 
 #[test]
@@ -137,9 +46,9 @@ fn an_ext_resident_image_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::gray("Image 0", "0", true),
-            ImageSpec::gray("Image 1", "ext", false),
-            ImageSpec::gray("Image 2", "2", true),
+            gray("Image 0", "0", true),
+            gray("Image 1", "ext", false),
+            gray("Image 2", "2", true),
         ],
     );
 
@@ -163,10 +72,10 @@ fn an_image_whose_block_is_missing_without_a_companion_is_not_called_ext_residen
     write_lif(
         &path,
         &[
-            ImageSpec::gray("Image 0", "0", true),
+            gray("Image 0", "0", true),
             // No block for it in this `.lif`, and no `.lifext` next to it
             // either: the file is short, not ext-resident.
-            ImageSpec::gray("Image 1", "ext", false),
+            gray("Image 1", "ext", false),
         ],
     );
 
@@ -191,9 +100,9 @@ fn a_refused_image_does_not_renumber_the_images_after_it() {
     write_lif(
         &path,
         &[
-            ImageSpec::gray("Image 0", "0", true),
-            ImageSpec::gray("Image 1", "ext", false),
-            ImageSpec::gray("Image 2", "2", true),
+            gray("Image 0", "0", true),
+            gray("Image 1", "ext", false),
+            gray("Image 2", "2", true),
         ],
     );
 
@@ -210,8 +119,8 @@ fn a_file_without_a_refused_image_refuses_nothing() {
     write_lif(
         &path,
         &[
-            ImageSpec::gray("Image 0", "0", true),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 0", "0", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -228,8 +137,8 @@ fn a_file_whose_images_are_all_ext_resident_fails_to_open() {
     write_lif(
         &path,
         &[
-            ImageSpec::gray("Image 0", "ext", false),
-            ImageSpec::gray("Image 1", "ext2", false),
+            gray("Image 0", "ext", false),
+            gray("Image 1", "ext2", false),
         ],
     );
 
@@ -251,7 +160,7 @@ fn an_image_with_an_unmodelled_dimension_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -264,7 +173,7 @@ fn an_image_with_an_unmodelled_dimension_is_refused_with_its_reason() {
             <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -286,7 +195,7 @@ fn an_image_with_an_unsupported_pixel_type_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -298,7 +207,7 @@ fn an_image_with_an_unsupported_pixel_type_is_refused_with_its_reason() {
             <ChannelDescription DataType="0" Resolution="32" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -319,7 +228,7 @@ fn an_image_whose_x_dimension_is_not_contiguous_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -331,7 +240,7 @@ fn an_image_whose_x_dimension_is_not_contiguous_is_refused_with_its_reason() {
             <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -352,7 +261,7 @@ fn an_image_whose_dimension_declares_no_elements_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -364,7 +273,7 @@ fn an_image_whose_dimension_declares_no_elements_is_refused_with_its_reason() {
             <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -385,7 +294,7 @@ fn an_image_with_a_duplicate_dimension_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -398,7 +307,7 @@ fn an_image_with_a_duplicate_dimension_is_refused_with_its_reason() {
             <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -419,7 +328,7 @@ fn an_image_with_a_malformed_numeric_attribute_is_refused_with_its_reason() {
     write_lif(
         &path,
         &[
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -431,7 +340,7 @@ fn an_image_with_a_malformed_numeric_attribute_is_refused_with_its_reason() {
             <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -454,7 +363,7 @@ fn an_image_whose_data_block_does_not_hold_its_frame_is_refused_with_its_reason(
         &[
             // The frame is 8x2 gray pixels, but the block holds 4x2: the span
             // of the image runs past its own block.
-            ImageSpec::with_body(
+            with_body(
                 "Image 0",
                 "0",
                 r#"
@@ -466,7 +375,7 @@ fn an_image_whose_data_block_does_not_hold_its_frame_is_refused_with_its_reason(
             <ChannelDescription DataType="0" Resolution="8" BytesInc="0" LUTName=""/>
           </Channels>"#,
             ),
-            ImageSpec::gray("Image 1", "1", true),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -481,10 +390,15 @@ fn an_image_whose_data_block_does_not_hold_its_frame_is_refused_with_its_reason(
     );
 }
 
-/// An image that states more elements than the reader can hold: the file says
-/// 4294967297 gray pixels in a row, which is one byte more than the reader's
-/// 4 GiB cap. The image cannot be decoded, but the FILE can: the other image
-/// of it still opens.
+/// An image that states more elements than the reader's decode ceiling: the
+/// file says 4294967297 gray pixels in a row, which is one byte more than the
+/// 4 GiB cap.
+///
+/// The CEILING does not refuse this image: it guards one materialisation, not
+/// the image's existence, so an image this big would be published and read one
+/// region at a time (see `tests/plane_ceiling.rs`). What refuses it here is
+/// the FILE: its memory block holds 8 bytes, not the 4 GiB the image states,
+/// so the bytes are simply not there.
 const OVERSIZED_BODY: &str = r#"
           <Dimensions>
             <DimensionDescription DimID="1" NumberOfElements="4294967297" BytesInc="1" Length="0.000004"/>
@@ -495,13 +409,13 @@ const OVERSIZED_BODY: &str = r#"
           </Channels>"#;
 
 #[test]
-fn an_image_whose_size_overflows_the_reader_is_refused_with_its_reason() {
+fn an_image_whose_plane_is_over_the_ceiling_is_not_refused_by_the_ceiling() {
     let path = lif_scratch("oversized_image");
     write_lif(
         &path,
         &[
-            ImageSpec::with_body("Image 0", "0", OVERSIZED_BODY),
-            ImageSpec::gray("Image 1", "1", true),
+            with_body("Image 0", "0", OVERSIZED_BODY),
+            gray("Image 1", "1", true),
         ],
     );
 
@@ -510,13 +424,19 @@ fn an_image_whose_size_overflows_the_reader_is_refused_with_its_reason() {
     let refused = reader.refused_scenes();
     assert_eq!(refused.len(), 1, "the oversized image is refused");
     assert_eq!(refused[0].image_index, 0, "it is the file's image 0");
-    // On a 64-bit target the count itself is held and the plane is refused as
-    // too big; on a 32-bit target the count does not fit and is refused
-    // earlier. Either way the image is refused, not the file.
+    // The reason names the MISSING BYTES, not the ceiling: the ceiling no
+    // longer refuses an image, so a refusal that still spoke of the cap would
+    // mean the old behaviour is back. On a 32-bit target the element count
+    // does not fit at all and is refused earlier.
     assert!(
-        refused[0].reason.contains("4294967297")
+        refused[0].reason.contains("data span")
             || refused[0].reason.contains("does not fit the reader"),
-        "the reason names the size: {}",
+        "the reason names the missing bytes: {}",
+        refused[0].reason
+    );
+    assert!(
+        !refused[0].reason.contains("cap"),
+        "the reason does not blame the decode ceiling: {}",
         refused[0].reason
     );
 }
@@ -524,7 +444,7 @@ fn an_image_whose_size_overflows_the_reader_is_refused_with_its_reason() {
 #[test]
 fn a_file_whose_only_image_overflows_fails_with_the_reason_of_that_image() {
     let path = lif_scratch("oversized_only_image");
-    write_lif(&path, &[ImageSpec::with_body("Image 0", "0", OVERSIZED_BODY)]);
+    write_lif(&path, &[with_body("Image 0", "0", OVERSIZED_BODY)]);
 
     match LifReader::open(&path) {
         Err(Error::Unsupported(message)) => {
@@ -533,9 +453,8 @@ fn a_file_whose_only_image_overflows_fails_with_the_reason_of_that_image() {
                 "the error says why the file cannot be read: {message}"
             );
             assert!(
-                message.contains("4294967297")
-                    || message.contains("does not fit the reader"),
-                "the error names the size the image states: {message}"
+                message.contains("data span") || message.contains("does not fit the reader"),
+                "the error names the missing bytes: {message}"
             );
         }
         Err(other) => panic!("the file must not open, got {other}"),

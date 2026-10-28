@@ -155,46 +155,15 @@ fn resolution_per_unit(dec: &mut TiffDec<'_>, tag: Tag) -> Option<f64> {
     }
 }
 
-/// True when an IFD's `NewSubfileType` (tag 254) marks it as a
-/// reduced-resolution (bit 0, value 1) or mask (bit 2, value 4) sub-file — i.e.
-/// NOT a real focal plane. Bit 1 (value 2, "single page of a multi-page image")
-/// is deliberately ignored: those pages ARE focal planes.
-fn is_reduced(newsubfiletype: u32) -> bool {
-    newsubfiletype & 0b101 != 0
-}
-
-/// Walk the IFD chain and collect the indices of the REAL focal-plane IFDs,
-/// dropping reduced-resolution / thumbnail / mask sub-files. Resets to IFD 0
-/// first so it is order-independent; leaves the decoder on the last IFD.
-///
-/// An absent `NewSubfileType` is treated as a full-resolution plane.
-fn real_focal_pages(dec: &mut TiffDec<'_>) -> Result<Vec<usize>> {
-    dec.seek_to_image(0)
-        .map_err(|e| Error::Decode(format!("seek to IFD 0: {e}")))?;
-    let mut pages = Vec::new();
-    let mut idx = 0usize;
-    loop {
-        let nsft = dec
-            .find_tag_unsigned::<u32>(Tag::NewSubfileType)
-            .map_err(|e| Error::Decode(format!("read NewSubfileType (IFD {idx}): {e}")))?
-            .unwrap_or(0);
-        if !is_reduced(nsft) {
-            pages.push(idx);
-        }
-        if !dec.more_images() {
-            break;
-        }
-        dec.next_image()
-            .map_err(|e| Error::Decode(format!("walk IFD chain: {e}")))?;
-        idx += 1;
-    }
-    Ok(pages)
-}
-
 /// Infer geometry for a plain (non-OME) TIFF directly from the file.
+///
+/// `real_pages` are the IFD indices that are REAL focal planes, in order. They
+/// come from the file's ONE pass over the IFD chain (see `tiff_pages`), so the
+/// chain is not walked a second time here.
 pub(crate) fn infer_plain(
     dec: &mut TiffDec<'_>,
     description: Option<&str>,
+    real_pages: &[usize],
 ) -> Result<PlainGeometry> {
     // These read the CURRENT image (IFD 0 after `Decoder::new`); read them
     // BEFORE walking the IFD chain to count pages.
@@ -236,7 +205,7 @@ pub(crate) fn infer_plain(
     // Only IFDs that are real focal planes count as planes; reduced-resolution
     // / thumbnail / mask sub-files are dropped so the plane count and the
     // plane→IFD mapping match tifffile's series grouping.
-    let mut real_pages = real_focal_pages(dec)?;
+    let mut real_pages = real_pages.to_vec();
     if real_pages.is_empty() {
         // Degenerate file where every IFD is flagged reduced/mask: fall back to
         // the primary IFD so the scene still exposes one plane rather than zero.
@@ -297,20 +266,6 @@ pub(crate) fn infer_plain(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn is_reduced_flags_thumbnails_and_masks() {
-        // Absent tag is decoded as 0 → real focal plane.
-        assert!(!is_reduced(0));
-        // Bit 0 (reduced-resolution / thumbnail) and bit 2 (mask) are NOT planes.
-        assert!(is_reduced(1));
-        assert!(is_reduced(4));
-        assert!(is_reduced(5));
-        assert!(is_reduced(0b101));
-        assert!(is_reduced(3)); // reduced + multi-page bit
-        // Bit 1 ("single page of a multi-page image") IS a real focal plane.
-        assert!(!is_reduced(2));
-    }
 
     #[test]
     fn map_dtype_refuses_by_name() {
