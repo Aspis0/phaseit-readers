@@ -1,20 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Byte-exact real-file parity test for the ND2 reader.
-//!
-//! Mirrors `tests/czi_real.rs`: reads a real Nikon ND2 file from the folder
-//! named by `PHASIT_REAL_DATA_DIR` (the layout is in the crate README) and
-//! skips cleanly (early return) when the variable is unset, when the file is
-//! absent, or when the pre-generated reference dumps are absent, so CI without
-//! them stays green — unless the run sets `PHASIT_REAL_DATA_REQUIRED=1`, which
-//! turns every such skip into a failure. When both ARE present these checks
-//! gate the reader against ground truth produced by the `nd2` Python
-//! reference:
-//!   * scene count and dims (T/C/Z/Y/X),
-//!   * every reference plane decodes byte-identically (native LE bytes),
-//!   * the first-8 samples match the manifest,
-//!   * out-of-range coordinates are clean errors.
-//!
-//! The fixtures dir is gitignored and NOT regenerated here.
+//! Byte-exact real-file parity test for the ND2 reader, against the `nd2` Python reference: scene count and dims, every
+//! plane
+//! byte-identical, the first-8 samples, and clean out-of-range errors.
+//! Reads a Nikon ND2 from `PHASIT_REAL_DATA_DIR`; skips when the file or the reference dumps are absent, and
+//! `PHASIT_REAL_DATA_REQUIRED=1` makes that a failure.
+//! The fixtures dir is gitignored and not regenerated here.
 
 mod real_data;
 
@@ -31,7 +21,6 @@ fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nd2_real")
 }
 
-/// Reinterpret a decoded U16 plane's samples as little-endian bytes.
 fn u16_plane_to_le_bytes(buf: &PlaneBuf) -> Vec<u8> {
     match buf {
         PlaneBuf::U16(v) => v.iter().flat_map(|s| s.to_le_bytes()).collect(),
@@ -84,7 +73,6 @@ fn nd2_real_parity() {
         assert_eq!(plane.shape, [y, x], "shape of {name}");
         assert_eq!(plane.samples, 1, "samples of {name}");
 
-        // first-8 samples must match the manifest.
         if let PlaneBuf::U16(v) = &plane.data {
             let first8: Vec<u64> = v.iter().take(8).map(|&s| s as u64).collect();
             let want8: Vec<u64> = plane_spec["first8"]
@@ -98,7 +86,6 @@ fn nd2_real_parity() {
             panic!("plane {name} is not U16");
         }
 
-        // Full byte-exact comparison against the reference .raw dump.
         let raw = std::fs::read(fixtures_dir().join(name))
             .unwrap_or_else(|e| panic!("read reference dump {name}: {e}"));
         let got = u16_plane_to_le_bytes(&plane.data);
@@ -106,7 +93,6 @@ fn nd2_real_parity() {
         assert!(got == raw, "byte-exact mismatch for {name}");
     }
 
-    // Out-of-range coordinates are clean errors, never panics.
     match reader.plane(0, 0, 0, want_z) {
         Err(Error::OutOfRange { z, .. }) if z == want_z => {}
         other => panic!("expected OutOfRange z={want_z}, got {other:?}"),

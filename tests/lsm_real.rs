@@ -1,19 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Real-file bit-exact parity test for the LSM reader.
-//!
-//! Uses a real Zeiss LSM confocal stack, read from the folder named by
-//! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README), and the `_ref`
-//! dumps: the tifffile ones for the stack, the Bio-Formats one for the tile
-//! scan. Skips cleanly (early return) when the variable is unset, or
-//! the sample or reference manifest is absent, so CI without the file stays
-//! green — unless the run sets `PHASIT_REAL_DATA_REQUIRED=1`, which turns
-//! every such skip into a failure. When they ARE present the `checked >= 8`
-//! assertion guarantees a silent skip cannot pass.
-//!
-//! The tile scan's reference hashes are NOT committed: a hash of a private
-//! acquisition file is a fingerprint of it. They live in a gitignored dump
-//! (`tests/parity/_ref/tilescan/manifest.json`), made by
-//! `tests/parity/dump_ref_lsm.py` from Bio-Formats' own output.
+//! Real-file bit-exact parity test for the LSM reader, against the tifffile and Bio-Formats `_ref` dumps.
+//! Skips when the sample or the reference is absent; `PHASIT_REAL_DATA_REQUIRED=1` makes that a failure, and
+//! `checked >= 8` stops a silent skip from passing.
+//! The tile scan's reference hashes are not committed: a hash of a private acquisition is a fingerprint of it.
 
 mod real_data;
 
@@ -24,25 +13,17 @@ use phasit_imread::{DType, Dims5, Error, ImageReader, PlaneBuf};
 
 use real_data::{real_file, reference_dump};
 
-// The CLI's own SHA-256, so a plane is hashed exactly the way the `imread
-// json` output hashes it — the same bytes Bio-Formats' hashes were taken of.
+// The CLI's own SHA-256, so the hashes match `imread json` output.
 #[path = "../src/bin/imread/sha256.rs"]
 mod sha256;
 
 const SAMPLE: &str = "lsm/stack.lsm";
 const TILE_SCAN: &str = "lsm/tilescan.lsm";
 
-/// The folder holding the reference dumps.
 fn ref_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parity/_ref")
 }
 
-/// Bio-Formats' reference of the tile scan's planes, when the dump is there.
-///
-/// The dump is gitignored: the hashes of a private acquisition file are a
-/// fingerprint of it, so they must not live in the repository. `reference_dump`
-/// turns a missing dump into a skip — or into a failure when the run demands
-/// the real data — so a required run cannot pass without it.
 fn tile_scan_reference() -> Option<serde_json::Value> {
     let path = ref_dir().join("tilescan/manifest.json");
     reference_dump(&path)?;
@@ -50,7 +31,6 @@ fn tile_scan_reference() -> Option<serde_json::Value> {
     Some(serde_json::from_slice(&bytes).expect("parse the tile-scan reference manifest"))
 }
 
-/// The reference hash of one series' plane.
 fn reference_sha256(reference: &serde_json::Value, series: usize) -> String {
     reference["planes"]
         .as_array()
@@ -91,13 +71,11 @@ fn lsm_geometry_and_out_of_range() {
     );
     assert!((px.x - 0.0659).abs() < 1e-3, "x px = {}", px.x);
 
-    // A valid plane has the right shape and dtype.
     let p = reader.plane(0, 0, 0, 0).expect("plane c0 z0");
     assert_eq!(p.shape, [1024, 1024]);
     assert_eq!(p.data.len(), 1024 * 1024);
     assert_eq!(p.dtype(), DType::U16);
 
-    // Out-of-range coordinates must be clean OutOfRange, never panics.
     match reader.plane(0, 0, 0, 35) {
         Err(Error::OutOfRange { scene: 0, t: 0, c: 0, z: 35 }) => {}
         other => panic!("expected OutOfRange for z=35, got {other:?}"),
@@ -112,10 +90,7 @@ fn lsm_geometry_and_out_of_range() {
     ));
 }
 
-/// A mosaic shot: the file holds 49 tiles, one page each, and the reader
-/// publishes one scene per tile. The scene count, the geometry and the
-/// channel name must match Bio-Formats, and a scene's plane must be
-/// bit-exact with the Bio-Formats series of the same index.
+/// A 49-tile mosaic: one scene per tile, matched to Bio-Formats by count, geometry, channel name and plane hash.
 #[test]
 fn lsm_tile_scan_publishes_one_scene_per_tile() {
     let Some(path) = real_file(TILE_SCAN) else {
@@ -143,12 +118,9 @@ fn lsm_tile_scan_publishes_one_scene_per_tile() {
         "the channel name Bio-Formats publishes"
     );
 
-    // The scene names carry Bio-Formats' suffix.
     assert_eq!(meta.scene(0).unwrap().name, "tilescan #1");
     assert_eq!(meta.scene(48).unwrap().name, "tilescan #49");
 
-    // The planes of the first and last scene, bit-exact with the hashes
-    // Bio-Formats reported for its series 0 and 48.
     for scene_index in [0usize, 48] {
         let plane = reader
             .plane(scene_index, 0, 0, 0)
@@ -164,17 +136,13 @@ fn lsm_tile_scan_publishes_one_scene_per_tile() {
         );
     }
 
-    // A scene outside the file is out of range, never a panic.
     assert!(matches!(
         reader.plane(49, 0, 0, 0),
         Err(Error::SceneOutOfRange { scene: 49, .. })
     ));
 }
 
-/// The tile scan's CZ-LSM-Info states 1e-19 m for its Z step: a placeholder
-/// in the place of a distance between two focal planes, not a step. The scene
-/// publishes the X/Y size the file really states and says why it has no Z
-/// step.
+/// The 1e-19 m Z step is a placeholder, not a distance: the scene publishes the X/Y size and no Z step.
 #[test]
 fn a_real_lsm_with_a_placeholder_z_step_says_so() {
     let Some(path) = real_file(TILE_SCAN) else {
@@ -197,9 +165,7 @@ fn a_real_lsm_with_a_placeholder_z_step_says_so() {
     );
 }
 
-/// Bit-exact parity: every LSM `_ref` plane must equal our decoded plane,
-/// element-for-element. This is the real gate on the page→(t,c,z) mapping and
-/// the manual strip reader.
+/// Element-for-element: the real gate on the page-to-(t,c,z) mapping and the manual strip reader.
 #[cfg(feature = "ndarray")]
 #[test]
 fn lsm_planes_bit_exact_vs_tifffile_reference() {
@@ -224,8 +190,7 @@ fn lsm_planes_bit_exact_vs_tifffile_reference() {
 
     let mut checked = 0usize;
     for obj in extract_objects(&manifest) {
-        // LSM reference entries carry Z and C in their nested plane_index; the
-        // The sample-offset "S" entries have no Z and are skipped here.
+        // LSM entries carry Z and C in their plane_index; the sample-offset S entries are skipped here.
         let (z, c) = match (json_int_field(&obj, "Z"), json_int_field(&obj, "C")) {
             (Some(z), Some(c)) => (z as usize, c as usize),
             _ => continue,
@@ -237,12 +202,8 @@ fn lsm_planes_bit_exact_vs_tifffile_reference() {
         let shape = json_shape(&obj).expect("plane_shape field");
 
         let npy_path = ref_root.join(&npy_rel);
-        // A manifest entry whose .npy is missing means a PARTIAL reference set: a
-        // broken dev env, not a legitimate skip. Hard-fail so `checked >= 8` can
-        // never be dodged by a half-present `_ref` dir. (The whole-manifest-absent
-        // case is handled by the early return above.) The message names the dump
-        // by its path under `tests/parity/_ref`, never by the absolute path of
-        // the build machine.
+        // A missing .npy under a present manifest is a broken dev env, not a skip: hard-fail, so `checked >= 8` cannot
+        // be dodged.
         assert!(
             npy_path.exists(),
             "partial LSM _ref: {npy_rel} is missing (broken reference set)"
@@ -278,8 +239,7 @@ fn lsm_planes_bit_exact_vs_tifffile_reference() {
     eprintln!("bit-exact parity: matched {checked} LSM planes element-for-element");
 }
 
-// --- minimal JSON helpers for the pretty-printed parity manifest -------------
-// Mirrors the helpers in `tiff_real.rs`; a targeted scan avoids a JSON dep.
+// A targeted scan of the machine-generated manifest avoids a JSON dependency.
 
 #[cfg(feature = "ndarray")]
 fn extract_objects(s: &str) -> Vec<String> {

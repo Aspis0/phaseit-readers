@@ -1,20 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Where a published CZI scene says it sits in the file.
-//!
-//! `scene_file_index` is the RANK of a scene among the sorted distinct `S`
-//! values of the file's full-resolution subblocks. It differs from the
-//! scene's own index when an earlier scene of the file was refused, so the
-//! refusal has to hold its place for the scenes around it to keep theirs.
-//!
-//! The containers are written by hand (see `support::czi`): one scene per
-//! distinct `S` value, and a scene made unreadable on purpose by mixing two
-//! pixel types in it.
+//! Where a published CZI scene says it sits in the file: `scene_file_index` is the rank of a scene among the sorted
+//! distinct `S` values.
+//! It differs from the scene's own index when an earlier scene was refused, so a refusal holds its place for the scenes
+//! around it.
+//! The containers are written by hand (`support::czi`): one scene per `S` value, and a scene made unreadable by mixing
+//! two pixel types.
 
 mod support;
 
 use phasit_imread::czi_reader::CziReader;
 use phasit_imread::ImageReader;
-use support::czi::{scratch, write_czi, Tile};
+use support::czi::{scratch, Tile};
+use support::czi_write::write_czi;
 
 /// A scene the reader refuses: Gray8 and Gray16 tiles do not compose.
 fn refused_scene(scene: i32) -> [Tile; 2] {
@@ -90,8 +87,7 @@ fn a_file_whose_scenes_start_at_one_numbers_the_ranks_from_zero() {
 
     let reader = CziReader::open(&path).expect("the file opens");
     assert_eq!(reader.meta().scene_count(), 2);
-    // The file numbers its scenes from 1; the rank is a position, so it counts
-    // from 0.
+    // The file numbers its scenes from 1; the rank counts from 0.
     assert_eq!(reader.scene_file_index(0), 0);
     assert_eq!(reader.scene_file_index(1), 1);
 }

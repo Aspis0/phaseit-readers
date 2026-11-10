@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! TIFF tags, read the way real files state them.
-//!
-//! The `tiff` crate's `find_tag_unsigned::<u16>` reads a tag only when the tag
-//! holds a single unsigned integer. Real files often state a tag once per
-//! sample — a 3-sample RGB page states three `SampleFormat` values — and the
-//! crate then answers "tag has invalid type", refusing a file that is
-//! perfectly ordinary. The readers here accept a scalar OR a list and answer
-//! the value the file means.
-//!
-//! A tag whose values DISAGREE is refused by name: a file that states two
-//! different sample formats is not a file this reader may guess about.
+//! The `tiff` crate reads a tag only when it is one scalar; real files state one value per sample
+//! (a 3-sample RGB page has three `SampleFormat`s). So this module accepts a scalar or a list, and refuses
+//! values that DISAGREE by name rather than guessing.
 
 use std::io::Cursor;
 
@@ -19,31 +11,19 @@ use tiff::tags::Tag;
 
 use crate::error::{Error, Result};
 
-/// PhotometricInterpretation (262): what a pixel in the file means.
 pub(crate) const PHOTOMETRIC_WHITE_IS_ZERO: u16 = 0;
-/// PhotometricInterpretation (262): 1 = a darker value is a lower value.
 pub(crate) const PHOTOMETRIC_BLACK_IS_ZERO: u16 = 1;
-/// PhotometricInterpretation (262): 2 = the samples of a pixel are R, G, B.
 pub(crate) const PHOTOMETRIC_RGB: u16 = 2;
-/// PhotometricInterpretation (262): 3 = the pixel is an index into a palette.
 pub(crate) const PHOTOMETRIC_PALETTE: u16 = 3;
-/// PhotometricInterpretation (262): 5 = the samples of a pixel are C, M, Y, K.
-pub(crate) const PHOTOMETRIC_CMYK: u16 = 5;
-/// PhotometricInterpretation (262): 6 = the samples of a pixel are Y, Cb, Cr.
-pub(crate) const PHOTOMETRIC_YCBCR: u16 = 6;
-/// PhotometricInterpretation (262): 8 = the samples of a pixel are CIELAB.
-pub(crate) const PHOTOMETRIC_CIELAB: u16 = 8;
-/// PhotometricInterpretation (262): 9 = the samples of a pixel are ICCLAB.
-pub(crate) const PHOTOMETRIC_ICCLAB: u16 = 9;
+const PHOTOMETRIC_CMYK: u16 = 5;
+const PHOTOMETRIC_YCBCR: u16 = 6;
+const PHOTOMETRIC_CIELAB: u16 = 8;
+const PHOTOMETRIC_ICCLAB: u16 = 9;
 
-/// SampleFormat (339): the samples of a pixel are unsigned integers.
 pub(crate) const SAMPLE_FORMAT_UINT: u16 = 1;
-/// SampleFormat (339): the samples of a pixel are signed integers.
 pub(crate) const SAMPLE_FORMAT_INT: u16 = 2;
-/// SampleFormat (339): the samples of a pixel are IEEE floats.
 pub(crate) const SAMPLE_FORMAT_IEEE_FLOAT: u16 = 3;
 
-/// The human name of a `SampleFormat` value, for a refusal that names it.
 pub(crate) fn sample_format_name(sample_format: u16) -> &'static str {
     match sample_format {
         SAMPLE_FORMAT_UINT => "unsigned integer",
@@ -53,8 +33,6 @@ pub(crate) fn sample_format_name(sample_format: u16) -> &'static str {
     }
 }
 
-/// The human name of a `PhotometricInterpretation` value, for a refusal that
-/// names it.
 pub(crate) fn photometric_name(photometric: u16) -> &'static str {
     match photometric {
         PHOTOMETRIC_WHITE_IS_ZERO => "WhiteIsZero",
@@ -69,7 +47,6 @@ pub(crate) fn photometric_name(photometric: u16) -> &'static str {
     }
 }
 
-/// Every unsigned number a tag value carries, whatever shape the value has.
 fn unsigned_values(value: &Value) -> Option<Vec<u64>> {
     match value {
         Value::Byte(value) => Some(vec![*value as u64]),
@@ -89,8 +66,6 @@ fn unsigned_values(value: &Value) -> Option<Vec<u64>> {
     }
 }
 
-/// The one number a tag states, when the tag holds it as a scalar or as a
-/// list of that same number. `None` when the file states no such tag.
 fn tag_number(
     dec: &mut Decoder<Cursor<&[u8]>>,
     tag: Tag,
@@ -113,8 +88,6 @@ fn tag_number(
     }
 }
 
-/// Every number a tag states, whatever shape the tag uses. `None` when the
-/// file states no such tag.
 pub(crate) fn tag_uints(
     dec: &mut Decoder<Cursor<&[u8]>>,
     tag: Tag,
@@ -133,15 +106,13 @@ pub(crate) fn tag_uints(
     Ok(Some(values))
 }
 
-/// Narrow a tag value to `u16`, refusing a value that does not fit.
 fn as_u16(value: u64, name: &str) -> Result<u16> {
     u16::try_from(value).map_err(|_| {
         Error::Unsupported(format!("TIFF {name} states {value}, which does not fit 16 bits"))
     })
 }
 
-/// The `SampleFormat` (339) the file states: 1 = unsigned int, 2 = signed int,
-/// 3 = IEEE float. A file that states none means unsigned int.
+/// A file that states none means unsigned integers (the TIFF default).
 pub(crate) fn sample_format(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     match tag_number(dec, Tag::SampleFormat, "SampleFormat")? {
         Some(value) => as_u16(value, "SampleFormat"),
@@ -149,8 +120,7 @@ pub(crate) fn sample_format(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     }
 }
 
-/// The `BitsPerSample` (258) the file states: the width of one sample. A file
-/// that states none means 8 bits.
+/// A file that states none means 8 bits.
 pub(crate) fn bits_per_sample(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u8> {
     match tag_number(dec, Tag::BitsPerSample, "BitsPerSample")? {
         Some(value) => u8::try_from(value).map_err(|_| {
@@ -162,8 +132,7 @@ pub(crate) fn bits_per_sample(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u8> {
     }
 }
 
-/// The `PhotometricInterpretation` (262) the file states: what a pixel means.
-/// A file that states none means BlackIsZero (a plain grayscale image).
+/// A file that states none means BlackIsZero (plain grayscale).
 pub(crate) fn photometric(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     match tag_number(dec, Tag::PhotometricInterpretation, "PhotometricInterpretation")? {
         Some(value) => as_u16(value, "PhotometricInterpretation"),
@@ -171,8 +140,7 @@ pub(crate) fn photometric(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     }
 }
 
-/// The `SamplesPerPixel` (277) the file states: the samples in one pixel. A
-/// file that states none means one sample (grayscale).
+/// A file that states none means one sample (grayscale).
 pub(crate) fn samples_per_pixel(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<usize> {
     match tag_number(dec, Tag::SamplesPerPixel, "SamplesPerPixel")? {
         Some(value) => Ok(value as usize),
@@ -180,9 +148,7 @@ pub(crate) fn samples_per_pixel(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<usiz
     }
 }
 
-/// The `PlanarConfiguration` (284) the file states: 1 = the samples of a
-/// pixel sit next to each other, 2 = each sample has its own plane. A file
-/// that states none means chunky.
+/// A file that states none means chunky (the samples of a pixel are adjacent).
 pub(crate) fn planar_configuration(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     match tag_number(dec, Tag::PlanarConfiguration, "PlanarConfiguration")? {
         Some(value) => as_u16(value, "PlanarConfiguration"),
@@ -190,8 +156,7 @@ pub(crate) fn planar_configuration(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u
     }
 }
 
-/// The `Compression` (259) the file states: 1 = the samples are stored as
-/// they are. A file that states none means uncompressed.
+/// A file that states none means uncompressed.
 pub(crate) fn compression(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     match tag_number(dec, Tag::Compression, "Compression")? {
         Some(value) => as_u16(value, "Compression"),
@@ -199,9 +164,7 @@ pub(crate) fn compression(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     }
 }
 
-/// The `Predictor` (317) the file states: 1 = the samples are stored as they
-/// are, 2 = each row is stored as the difference to the row above it. A file
-/// that states none means none.
+/// 2 = each row is stored as the difference from the row above; a file that states none means 1.
 pub(crate) fn predictor(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     match tag_number(dec, Tag::Predictor, "Predictor")? {
         Some(value) => as_u16(value, "Predictor"),
@@ -209,11 +172,7 @@ pub(crate) fn predictor(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<u16> {
     }
 }
 
-/// The palette (320) an indexed file states: the RGB colour of every index.
-///
-/// The tag holds three runs of `2^bits` 16-bit values (red, green, blue).
-/// The colours are scaled down to 8 bits per component — the width an index
-/// of this depth can be displayed with.
+/// The palette (320): three runs of `2^bits` 16-bit values; each is scaled to 8 bits, the display width.
 pub(crate) fn color_map(
     dec: &mut Decoder<Cursor<&[u8]>>,
     bits: u8,

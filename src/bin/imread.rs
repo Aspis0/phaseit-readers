@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `imread` — CLI front-end for phasit-imread.
-//!
-//! Built solely on phasit-imread's public API (`phasit_imread::{open,
-//! detect_format}` + the `ImageReader` trait). Four subcommands:
+//! `imread` — CLI front-end for phasit-imread, built on its public API only.
 //!
 //! ```text
 //! imread info <file>
@@ -10,20 +7,12 @@
 //! imread json <file>
 //! imread sweep --json <listfile>
 //! ```
-//!
-//! The two JSON modes report one file as one line of JSON — the format the
-//! reader detected, the outcome of the open, every scene's metadata, the
-//! scenes the reader refused, and the statistics and hash of the planes the
-//! sweep decodes. `imread json` reports one file; `imread sweep` reports every
-//! file of a list file.
 
 use std::path::{Path, PathBuf};
 
 use phasit_imread::Result as ImreadResult;
 
-// The bin's own modules live in `src/bin/imread/`, one responsibility each.
-// Rust resolves a module of `src/bin/imread.rs` next to that file, so the path
-// of each module is named here.
+// Modules live in `src/bin/imread/`; each `#[path]` names its file.
 #[path = "imread/batch.rs"]
 mod batch;
 #[path = "imread/json.rs"]
@@ -35,7 +24,6 @@ mod report;
 #[path = "imread/sha256.rs"]
 mod sha256;
 
-/// A parsed, ready-to-run CLI command.
 #[derive(Debug)]
 enum Command {
     Info {
@@ -54,15 +42,11 @@ enum Command {
     },
     Sweep {
         list: PathBuf,
-        /// Whether the sweep compares each window with the same window
-        /// cropped out of the whole plane. The comparison is ON by default;
-        /// a timing run turns it OFF, so that two builds do exactly the same
-        /// work per file.
+        /// Compare each sweep window with the same crop of the whole plane; a timing run turns it off.
         regions: bool,
     },
 }
 
-/// Short usage/help text, printed on any argument error.
 fn usage_text() -> String {
     format!(
         "imread (phasit-imread {})\n\nusage:\n  imread info <file>\n  \
@@ -72,15 +56,12 @@ fn usage_text() -> String {
     )
 }
 
-/// Parse one numeric CLI argument, reporting a clear error (plus usage) on failure.
 fn parse_usize(name: &str, raw: &str) -> Result<usize, String> {
     raw.parse::<usize>()
         .map_err(|e| format!("invalid {name} value {raw:?}: {e}\n\n{}", usage_text()))
 }
 
-/// Parse the process argument vector (WITHOUT the program name) into a
-/// [`Command`], or an error message (already including usage text) to print
-/// to stderr with exit code 2.
+/// Parses the arguments (without the program name); an error already includes the usage text.
 fn parse_args(args: &[String]) -> Result<Command, String> {
     match args {
         [sub, file] if sub == "info" => Ok(Command::Info { file: PathBuf::from(file) }),
@@ -117,8 +98,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     }
 }
 
-/// Run a parsed command; any `Err` here is a `phasit_imread::Error` from
-/// `open`/`plane`, printed as `error: {e}` with exit code 1.
+/// An `Err` is printed as `error: {e}` with exit code 1.
 fn run(cmd: Command) -> ImreadResult<()> {
     match cmd {
         Command::Info { file } => run_info(&file),
@@ -162,8 +142,6 @@ fn run_info(path: &Path) -> ImreadResult<()> {
 
         let d = scene.dims;
         println!("    dims:    T={} C={} Z={} Y={} X={}", d.t, d.c, d.z, d.y, d.x);
-        // Show samples-per-pixel for color/multi-sample scenes (e.g. Bgr24 ->
-        // "U8 (RGB, 3 spp)"); grayscale prints the plain dtype as before.
         match scene.samples {
             1 => println!("    dtype:   {:?}", scene.dtype),
             3 => println!("    dtype:   {:?} (RGB, 3 spp)", scene.dtype),
@@ -171,8 +149,6 @@ fn run_info(path: &Path) -> ImreadResult<()> {
         }
         println!("    channels: {}", scene.channels.len());
 
-        // Only print per-channel detail when the format actually recorded
-        // names/colors for at least one channel.
         if scene.channels.iter().any(|ch| ch.name.is_some() || ch.color.is_some()) {
             for (ci, ch) in scene.channels.iter().enumerate() {
                 let name = ch.name.as_deref().unwrap_or("(unnamed)");
@@ -194,8 +170,6 @@ fn run_info(path: &Path) -> ImreadResult<()> {
             None => println!("    px size: (none)"),
         }
 
-        // What the reader could not use of the file's calibration, said out
-        // loud: a scene with no calibration problem has nothing to say.
         for note in &scene.notes {
             println!("    note:    {note}");
         }
@@ -331,8 +305,7 @@ mod tests {
 
     #[test]
     fn sweep_can_skip_the_window_comparison() {
-        // The timing runs compare two builds, so they must do the SAME work
-        // per file: the comparison is turned off for them.
+        // Timing runs compare two builds: they must do the same work per file, so the region comparison is off.
         let cmd = parse_args(&args(&["sweep", "--json", "--no-regions", "list.txt"])).unwrap();
         match cmd {
             Command::Sweep { list, regions } => {

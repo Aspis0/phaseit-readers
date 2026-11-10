@@ -1,45 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Real-file bit-exact parity test for the CZI reader on a real Zeiss Axioscan
-//! JPEG-XR CZI.
-//!
-//! The sample is the public Zenodo record 11234863 ("Human DAB staining
-//! Axioscan BF 20x", CC-BY-4.0), linked into the folder named by
-//! `PHASIT_REAL_DATA_DIR` as `czi/brightfield-jxr.czi` (the layout is in the
-//! crate README). It is a whole-slide brightfield mosaic: 1958 full-resolution
-//! tiles of 2056x2464 pixels, JPEG-XR compressed, `PixelType = Bgr24`.
-//!
-//! The reference is the `czifile` ground truth dumped by
-//! `tests/parity/dump_ref_czi_jxr.py`: nine 1024x1024 regions of the composed
-//! scene — four single-tile interiors, two seams between side-by-side tiles, a
-//! corner where four tiles meet, the bottom-right corner of a tile's interior,
-//! and a window at the edge of the scene that no tile covers entirely. The
-//! dumps live in `tests/parity/_ref/czi_jxr/` (manifest.json + one `.npy` per
-//! region); `czi_jxr_ref` reads them.
-//!
-//! COMPOSITION ORDER: the reference composes the tiles of a region the way
-//! `czifile` does — in ascending mosaic index, so the tile with the higher M
-//! ends up on top (`czifile.py:1308`, `czifile.py:1309`, applied at
-//! `czifile.py:2810` and `czifile.py:2811`). `phasit-imread` composes them in
-//! the same order (`src/czi_reader.rs`, `CziReader::open` — the per-plane
-//! mosaic sort), so the reader and the ground
-//! truth agree on every pixel. The manifest still records the subblock
-//! directory order per region beside the mosaic order, and the seam and corner
-//! regions are the ones where the two orders disagree — there the composition
-//! order decides the bytes, so those regions are the ones that catch a reader
-//! that composites in the wrong order.
-//!
-//! SAMPLE ORDER: the container stores B,G,R (`PixelType = Bgr24`); `czifile`
-//! returns the JPEG-XR tiles as R,G,B (it does not swap BGR->RGB for
-//! compression 4, because the decoder already returns R,G,B), and that is the
-//! order this reader publishes (`czi_reader.rs` swaps B<->R after the codec
-//! returns the container's native order). The `.npy` files therefore hold
-//! R,G,B.
-//!
-//! SKIP GUARD: the test skips cleanly when `PHASIT_REAL_DATA_DIR` is unset,
-//! when the sample is absent, or when the reference dumps are absent. The
-//! guard is the shared real-data gate: `PHASIT_REAL_DATA_REQUIRED=1` turns
-//! every such skip into a failure (`tests/real_data/mod.rs`), so a required
-//! run cannot pass without the sample and the dumps.
+//! Real Zeiss Axioscan JPEG-XR CZI (`czi/brightfield-jxr.czi` under `PHASIT_REAL_DATA_DIR`; Zenodo 11234863,
+//! CC-BY-4.0).
+//! The reference is `czifile`'s output, dumped by `tests/parity/dump_ref_czi_jxr.py`; `czi_jxr_ref` reads the dumps.
+//! Composition is ascending mosaic index, as `czifile` composes. The seam and corner regions are where the
+//! subblock-directory
+//! order disagrees, so they catch a reader that composites in the wrong order.
+//! `czifile` returns JPEG-XR tiles as R,G,B although the container stores B,G,R: the `.npy` files hold R,G,B, and the
+//! reader
+//! swaps B<->R after the codec. The skip guard is the shared real-data gate in `tests/real_data/mod.rs`.
 
 mod czi_jxr_ref;
 mod real_data;
@@ -53,10 +21,8 @@ use phasit_imread::{DType, ImageReader};
 
 use real_data::real_file;
 
-/// The public Axioscan sample, relative to `PHASIT_REAL_DATA_DIR`.
 const SAMPLE: &str = "czi/brightfield-jxr.czi";
 
-/// The scene geometry the reference script recorded.
 #[test]
 fn czi_jxr_real_geometry() {
     let Some(path) = real_file(SAMPLE) else {
@@ -97,23 +63,13 @@ fn czi_jxr_real_geometry() {
     assert!(reader.supports_region(), "the CZI reader streams regions");
 }
 
-/// The manifest must name the composition order the reference was MADE with,
-/// and every region must say it was composited in that order.
 #[test]
 fn czi_jxr_real_composition() {
     let Some(manifest) = manifest() else {
         return;
     };
 
-    // The manifest names the composition order the reference was MADE with and
-    // the one the reader uses. Both must be czifile's order — ascending mosaic
-    // index — and they must be the SAME rule, or the reference does not
-    // certify the reader at all.
-    //
-    // The manifest records the order the dump was actually made with, so a
-    // reference produced with `--order subblock_directory_order` says so here
-    // and this test goes RED instead of certifying a reference made the other
-    // way round.
+    // The reference must have been made in czifile's order: a dump made otherwise must turn this test red.
     let composition = &manifest["composition"];
     let expected_order = "mosaic_index_ascending";
     assert_eq!(
@@ -145,19 +101,13 @@ fn czi_jxr_real_composition() {
     );
 }
 
-/// Every region must say which order it was composited in, and it must be the
-/// order the manifest declares.
 #[test]
 fn czi_jxr_real_region_orders() {
     let Some(manifest) = manifest() else {
         return;
     };
 
-    // The order comes from the manifest, not from a literal here: the manifest
-    // names the order the reference was MADE with, and every region has to
-    // agree with it. A literal in the test would go stale the moment the
-    // manifest changes — and it would not notice a reference made in another
-    // order.
+    // The order comes from the manifest, not a literal: a literal would go stale when the manifest changes.
     let declared = manifest["composition"]["reference_order"]
         .as_str()
         .expect("the manifest declares the composition order");
@@ -170,16 +120,13 @@ fn czi_jxr_real_region_orders() {
     }
 }
 
-/// The reference set must be complete, and it must cover the mosaic.
 #[test]
 fn czi_jxr_real_reference_set() {
     let Some(manifest) = manifest() else {
         return;
     };
 
-    // The reference set is complete, and it covers the mosaic: an overlap, a
-    // region the tiles do not cover entirely, and a region where the two
-    // composition orders disagree.
+    // The set covers an overlap, a region no tile covers entirely, and a region where the two orders disagree.
     let all = regions(&manifest);
     eprintln!(
         "the reference set holds {} regions: {}",
@@ -211,10 +158,7 @@ fn czi_jxr_real_reference_set() {
     );
 }
 
-/// Every reference region must be bit-exact against the `czifile` dump.
-///
-/// Every region is compared and EVERY difference is reported before the test
-/// fails: the first mismatch does not hide the ones after it.
+/// Every difference is reported before the test fails, so one mismatch does not hide the rest.
 #[cfg(all(feature = "ndarray", feature = "jpegxr"))]
 #[test]
 fn czi_jxr_real_regions_bit_exact() {
@@ -252,11 +196,6 @@ fn czi_jxr_real_regions_bit_exact() {
     );
 }
 
-/// Compare one region with the reference and describe the difference, if any.
-///
-/// Every failure is a `Result`, never a panic: the caller compares every
-/// region and reports them all, so one broken region does not hide the ones
-/// after it.
 #[cfg(all(feature = "ndarray", feature = "jpegxr"))]
 fn compare_region(reader: &CziReader, region: &Region) -> Result<String, String> {
     use ndarray::Array3;
@@ -339,11 +278,7 @@ fn compare_region(reader: &CziReader, region: &Region) -> Result<String, String>
     }
 }
 
-/// Without the `ndarray` feature there is no `.npy` reader, so that build
-/// cannot compare the reference bytes. It checks the properties that need no
-/// reference: that a JPEG-XR subblock really decodes, that the region has the
-/// size the manifest records, and that its pixels are image content and not a
-/// constant fill.
+/// Without `ndarray` there is no `.npy` reader: this build checks the properties that need no reference.
 #[cfg(all(feature = "jpegxr", not(feature = "ndarray")))]
 #[test]
 fn czi_jxr_real_region_decodes_without_ndarray() {
@@ -392,8 +327,7 @@ fn czi_jxr_real_region_decodes_without_ndarray() {
         "byte length of {}",
         region.name
     );
-    // The reader fills the pixels no tile covers with zero, so any non-zero
-    // byte is a pixel a JPEG-XR subblock decoded.
+    // Uncovered pixels are zero-filled, so a non-zero byte is a decoded pixel.
     assert!(
         data.iter().any(|byte| *byte != 0),
         "region {} holds no decoded pixel",
@@ -413,8 +347,7 @@ fn czi_jxr_real_region_decodes_without_ndarray() {
     );
 }
 
-/// Without the `jpegxr` feature the file still opens, but decoding a
-/// JPEG-XR subblock is refused with the documented `Unsupported` error.
+/// Without `jpegxr` a JPEG-XR subblock is refused with the documented `Unsupported` error.
 #[cfg(not(feature = "jpegxr"))]
 #[test]
 fn czi_jxr_real_unsupported_without_jpegxr() {
@@ -444,8 +377,7 @@ fn czi_jxr_real_unsupported_without_jpegxr() {
         }
         other => panic!("expected Unsupported without the jpegxr feature, got {other:?}"),
     }
-    // The whole scene is 99943x148423x3 = 44.5 GB, far over the decoded-plane
-    // cap, so the whole-plane read is refused before the codec is even asked.
+    // The whole scene is far over the decoded-plane cap, so the whole-plane read is refused before any decoding.
     match reader.plane(0, 0, 0, 0) {
         Err(Error::OversizedAllocation { requested, cap }) => {
             assert!(
@@ -458,15 +390,8 @@ fn czi_jxr_real_unsupported_without_jpegxr() {
     }
 }
 
-/// TIMING PROBE — not a correctness test. It measures how long the reader
-/// needs to open the whole-slide CZI and to read the reference regions out of
-/// it. Ignored by default; run it explicitly with
-/// `cargo test --release --features jpegxr,ndarray --test czi_jxr_real -- --ignored`.
-///
-/// On MSVC the release build of the vendored jxrlib needs the C flags
-/// `-D_byteswap_ulong=phasit_byteswap_ulong`: with /O2 (which implies /Oi)
-/// MSVC refuses the vendored fallback definition of `_byteswap_ulong` with
-/// C2169, because that name is an intrinsic. The debug build is unaffected.
+/// Timing probe, not a correctness test (ignored by default; run with `--release --ignored`).
+/// The MSVC release build of the vendored jxrlib needs `-D_byteswap_ulong=phasit_byteswap_ulong` (with /O2, C2169).
 #[cfg(all(feature = "ndarray", feature = "jpegxr"))]
 #[test]
 #[ignore = "timing probe, not a correctness test"]

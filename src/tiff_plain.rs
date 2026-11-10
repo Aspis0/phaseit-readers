@@ -1,15 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The geometry of a plain (non-OME) TIFF, read out of the file's own tags.
-//!
-//! A plain TIFF states everything about itself: the pages are the planes, the
-//! `PhotometricInterpretation` says what a pixel in a page means, and the
-//! `NewSubfileType` of a page says whether it is a real focal plane at all.
-//!
-//! The pages are stacked the way ImageJ stacks them — CHANNEL-FIRST — and the
-//! ImageJ description (tag 270) says how many channels, slices and frames the
-//! stack has. The order is the one Bio-Formats reports as
-//! `DimensionOrder = XYCZT` for the same file, so both readers address the
-//! same plane with the same coordinates.
+//! The geometry of a plain (non-OME) TIFF, read from the file's own tags: pages are planes, and `NewSubfileType`
+//! says which are real focal planes. Pages are stacked CHANNEL-FIRST, the order Bio-Formats reports as `XYCZT`.
 
 use tiff::decoder::Decoder;
 use tiff::tags::Tag;
@@ -20,36 +11,23 @@ use crate::tiff_imagej;
 use crate::tiff_tags;
 use crate::types::{ChannelMeta, DType, Dims5, SceneMeta};
 
-/// The decoder the geometry is read from (a cursor over the mapped bytes).
 type TiffDec<'a> = Decoder<std::io::Cursor<&'a [u8]>>;
 
-/// How the pages of a plain TIFF are stacked, and what one page carries.
 #[derive(Debug, Clone)]
 pub(crate) struct PagesPlan {
-    /// Number of channels the stack holds.
     pub channels: usize,
-    /// Number of focal planes.
     pub slices: usize,
-    /// Samples per pixel of every page.
     pub samples: usize,
-    /// The width of one sample, as the file states it.
     pub bits: u8,
 }
 
-/// The geometry of a plain TIFF: the scene, the page plan and the IFD table.
 pub(crate) struct PlainGeometry {
-    /// The scene the file describes.
     pub scene: SceneMeta,
-    /// How the pages are stacked.
     pub plan: PagesPlan,
-    /// The IFD indices that are REAL focal planes, in order.
     pub real_pages: Vec<usize>,
 }
 
-/// Map a TIFF `(SampleFormat, bits)` pair to our [`DType`], or refuse by name
-/// the sample types we do not model yet (U32/F16/F64/I8/I32…).
-///
-/// `SampleFormat`: 1 = unsigned int, 2 = signed int, 3 = IEEE float.
+/// Refuses by name the sample types not modelled yet (U32, F16, F64, I8, I32).
 pub(crate) fn map_dtype(bits: u8, sample_format: u16) -> Result<DType> {
     match (sample_format, bits) {
         (tiff_tags::SAMPLE_FORMAT_UINT, 8) => Ok(DType::U8),
@@ -63,23 +41,13 @@ pub(crate) fn map_dtype(bits: u8, sample_format: u16) -> Result<DType> {
     }
 }
 
-/// The colour model a plain TIFF page states: how many samples a pixel of the
-/// page carries, and (for an indexed page) the palette the page indexes.
 struct ColourModel {
-    /// Samples per pixel of every page.
     samples: usize,
-    /// The palette of an indexed page.
     palette: Option<Vec<[u8; 3]>>,
 }
 
-/// Read the colour model out of the file's own tags.
-///
-/// The `PhotometricInterpretation` says what a pixel means:
-/// - BlackIsZero / WhiteIsZero: one sample per pixel;
-/// - RGB: the samples of a pixel are its colour components, and they stay
-///   together in the page (one channel of N components);
-/// - RGBPalette: the pixel is an index into the palette, and the index values
-///   are what the page carries.
+/// RGB pages stay one channel of N components. RGBPalette pages carry their index values;
+/// the palette is published beside them, not applied.
 fn colour_model(
     dec: &mut TiffDec<'_>,
     photometric: u16,
@@ -94,10 +62,9 @@ fn colour_model(
                     tiff_tags::photometric_name(photometric)
                 )));
             }
-            // A ColorMap on a grey page is not read, on purpose: TIFF 6.0 defines
-            // ColorMap for PhotometricInterpretation 3 (RGBPalette), and a grey
-            // page's samples are its values whatever a ColorMap says. ImageJ writes
-            // one for its LUT, so that LUT is not published.
+            // TIFF 6.0 defines ColorMap only for RGBPalette; a grey page's samples are its values, so a ColorMap is
+            // ignored.
+            // ImageJ writes one for its LUT, which is therefore not published.
             Ok(ColourModel {
                 samples: 1,
                 palette: None,
@@ -115,8 +82,8 @@ fn colour_model(
             })
         }
         tiff_tags::PHOTOMETRIC_PALETTE => {
-            // The index plane is read at 8 bits only (tiff_palette.rs); a 1-, 4- or
-            // 16-bit index is refused here, at open, rather than at the first plane.
+            // Index planes are read at 8 bits only (tiff_palette.rs): other depths are refused at open, not at the
+            // first plane.
             if bits != 8 {
                 return Err(Error::Unsupported(format!(
                     "TIFF indexed page with {bits}-bit indices not supported yet (only 8-bit)"
@@ -139,15 +106,10 @@ fn colour_model(
     }
 }
 
-/// The pixels-per-unit count a resolution tag (282/283) states, when it is a
-/// readable positive rational. Calibration is best-effort, so anything else
-/// (missing tag, zero denominator) reads as "not stated" rather than failing
-/// open().
+/// Calibration is best-effort: a missing tag or zero denominator reads as "not stated", never fails open().
 fn resolution_per_unit(dec: &mut TiffDec<'_>, tag: Tag) -> Option<f64> {
     match dec.find_tag(tag) {
-        // The `Rational` type covers classic TIFF; BigTIFF rationals arrive
-        // through a variant this `tiff` version never constructs (deprecated
-        // as unimplemented), so there is no second arm to read.
+        // Only classic-TIFF rationals arrive here: this `tiff` version never builds the BigTIFF variant.
         Ok(Some(tiff::decoder::ifd::Value::Rational(n, d))) if d != 0 => {
             Some(n as f64 / d as f64)
         }
@@ -155,18 +117,13 @@ fn resolution_per_unit(dec: &mut TiffDec<'_>, tag: Tag) -> Option<f64> {
     }
 }
 
-/// Infer geometry for a plain (non-OME) TIFF directly from the file.
-///
-/// `real_pages` are the IFD indices that are REAL focal planes, in order. They
-/// come from the file's ONE pass over the IFD chain (see `tiff_pages`), so the
-/// chain is not walked a second time here.
+/// `real_pages` comes from the single IFD-chain pass in `tiff_pages`, so the chain is not walked twice.
 pub(crate) fn infer_plain(
     dec: &mut TiffDec<'_>,
     description: Option<&str>,
     real_pages: &[usize],
 ) -> Result<PlainGeometry> {
-    // These read the CURRENT image (IFD 0 after `Decoder::new`); read them
-    // BEFORE walking the IFD chain to count pages.
+    // Reads IFD 0 (the current image): these must run before the IFD chain is walked.
     let (w, h) = dec
         .dimensions()
         .map_err(|e| Error::Decode(format!("read dimensions: {e}")))?;
@@ -178,9 +135,7 @@ pub(crate) fn infer_plain(
     let sample_format = tiff_tags::sample_format(dec)?;
     let dtype = map_dtype(bits, sample_format)?;
 
-    // PlanarConfiguration: 1 = chunky/interleaved, 2 = separate planes. We only
-    // handle chunky multi-sample pages; planar RGB within one IFD is rare in
-    // microscopy and the crate's `read_image` would need per-plane reads.
+    // Only chunky multi-sample pages are handled: planar RGB would need per-plane reads.
     if samples_per_pixel > 1 && planar == 2 {
         return Err(Error::Unsupported(
             "planar (PlanarConfiguration=2) multi-sample TIFF not supported yet".to_string(),
@@ -189,10 +144,6 @@ pub(crate) fn infer_plain(
 
     let colour = colour_model(dec, photometric, samples_per_pixel, bits)?;
 
-    // Calibration (the ImageJ description and the resolution tags), read
-    // while the decoder is still on IFD 0 — the same condition as w/h above.
-    // Calibration is best-effort metadata: a missing or unreadable tag leaves
-    // the file uncalibrated and never fails open().
     let calibration = tiff_calibration::calibration_from_tags(
         description,
         resolution_per_unit(dec, Tag::XResolution),
@@ -202,19 +153,13 @@ pub(crate) fn infer_plain(
             .flatten(),
     );
 
-    // Only IFDs that are real focal planes count as planes; reduced-resolution
-    // / thumbnail / mask sub-files are dropped so the plane count and the
-    // plane→IFD mapping match tifffile's series grouping.
+    // Reduced and mask sub-files are dropped so the plane count matches tifffile's series grouping.
     let mut real_pages = real_pages.to_vec();
     if real_pages.is_empty() {
-        // Degenerate file where every IFD is flagged reduced/mask: fall back to
-        // the primary IFD so the scene still exposes one plane rather than zero.
+        // A file whose every IFD is reduced or mask keeps the primary IFD, so the scene has one plane.
         real_pages.push(0);
     }
 
-    // The ImageJ description says how the pages are stacked. A description
-    // that does not describe this file's pages is not used: the pages are then
-    // read as one channel per page.
     let layout = description
         .and_then(tiff_imagej::layout)
         .and_then(|layout| layout.stack_shape(real_pages.len()))
@@ -242,8 +187,6 @@ pub(crate) fn infer_plain(
     let scene = SceneMeta {
         dims,
         dtype,
-        // The samples of a pixel stay together in the plane (see the reader's
-        // module docs): an RGB page is one channel of three components.
         samples: colour.samples as u32,
         px_size_um: calibration.px_size_um,
         notes: calibration.notes,

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A plain TIFF's colour model comes from its PhotometricInterpretation. A
-//! ColorMap on a grey page is not an RGBPalette, so it is not published.
+//! A plain TIFF's colour model comes from its PhotometricInterpretation; a ColorMap on grey is not an RGBPalette.
 
 mod support;
 
@@ -14,8 +13,7 @@ use tiff::tags::Tag;
 
 #[test]
 fn a_colormap_on_a_grey_page_is_not_published_and_its_values_are_kept() {
-    // ImageJ writes a ColorMap for its LUT on a grey page. The page's samples are
-    // its values, unchanged, and the LUT is not in the scene.
+    // ImageJ writes a ColorMap for its LUT on a grey page: the samples keep their values and the LUT is not published.
     let dir = scratch_dir("plain_colormap");
     let path = dir.join("lut.tif");
     {

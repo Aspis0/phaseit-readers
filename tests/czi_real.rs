@@ -1,20 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Real-file structural smoke test for the CZI reader.
-//!
-//! Uses real Zeiss confocal `.czi` files, read from the folder named by
-//! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README). Skips cleanly
-//! (early return) when the variable is unset or a sample is absent, so CI
-//! without the files stays green — unless the run sets
-//! `PHASIT_REAL_DATA_REQUIRED=1`, which turns every such skip into a failure.
-//! When the files ARE present these checks gate:
-//!   * dimensions (C/Z/T/Y/X in canonical TCZYX order),
-//!   * mosaic composition (`czi/mosaic.czi` composes 4 M-tiles per (C,Z) into
-//!     one bounding-box scene plane),
-//!   * a mid-stack plane decodes to the expected shape/dtype with sane values.
-//!
-//! Bit-exact parity against the `czifile` reference is a SEPARATE harness (the
-//! multi-GB reference dumps are built elsewhere); this test only proves
-//! structural correctness.
+//! Real-file smoke test of the CZI reader: dimensions, mosaic and a mid-stack plane, read from `PHASIT_REAL_DATA_DIR`.
+//! Skips when the variable or a sample is absent; `PHASIT_REAL_DATA_REQUIRED=1` makes those failures.
+//! Bit-exact parity against `czifile` is a separate harness; this test proves structure only.
 
 mod real_data;
 
@@ -23,13 +10,9 @@ use phasit_imread::{DType, Error, ImageReader, PlaneBuf};
 
 use real_data::{bgr_sample, real_file};
 
-/// The mosaic sample: several tiles per (C,Z), composed into one scene.
 const SAMPLE_MOSAIC: &str = "czi/mosaic.czi";
-/// The pre-stitched sample: one tile per (C,Z).
 const SAMPLE_STITCH: &str = "czi/stitched.czi";
 
-/// Assert a decoded plane is structurally sane: right shape/dtype and not blank
-/// (at least one non-zero 16-bit sample).
 fn assert_u16_plane_sane(data: &PlaneBuf, expect_shape: [usize; 2]) {
     match data {
         PlaneBuf::U16(v) => {
@@ -58,11 +41,9 @@ fn czi_mosaic_geometry_and_plane() {
     assert_eq!(scene.dims.t, 1, "time points");
     assert_eq!(scene.dtype, DType::U16);
     assert_eq!(scene.channels.len(), 2);
-    // The composed mosaic plane must be larger than a single tile (tiles span
-    // X/Y positions -486..1509, so the bounding box is ~1996 on a side).
+    // Tiles span -486..1509 on X/Y, so the composed plane is about 1996 pixels on a side.
     assert!(scene.dims.x > 1000 && scene.dims.y > 1000, "composed mosaic size");
 
-    // A mid-stack plane decodes to the composed scene shape with sane values.
     let z_mid = scene.dims.z / 2;
     let expect = [scene.dims.y, scene.dims.x];
     let p = reader.plane(0, 0, 0, z_mid).expect("decode mid-stack plane");
@@ -113,8 +94,7 @@ fn czi_stitched_geometry_and_plane() {
     assert_eq!(p.shape, expect);
     assert_u16_plane_sane(&p.data, expect);
 
-    // Full plane_index sweep would be expensive; just confirm every channel at
-    // z_mid decodes to the same composed shape.
+    // A full sweep of every plane is too slow for a smoke test: the channels at z_mid are checked.
     for c in 0..scene.dims.c {
         let pc = reader.plane(0, 0, c, z_mid).expect("decode channel plane");
         assert_eq!(pc.shape, expect, "channel {c} shape");
@@ -124,13 +104,7 @@ fn czi_stitched_geometry_and_plane() {
 
 #[test]
 fn czi_bgr24_color_geometry_and_plane() {
-    // Real uncompressed Bgr24 sample (Zeiss/Bio-Formats `c_winnt.czi`, 275x174,
-    // single subblock). Third-party — NOT committed, and NOT part of the
-    // owner's real-data folder, so it is an OPTIONAL extra: it skips when the
-    // variable is unset, even in a run that requires the real data (that flag
-    // governs the owner's files, not a third-party sample). The colour
-    // contract itself is checked on a committed synthetic fixture — see
-    // `czi_bgr24_synthetic.rs`.
+    // Third-party and not committed, so it is an optional extra: it skips even when the real data is required.
     let Some(path) = bgr_sample() else {
         return;
     };
@@ -140,8 +114,7 @@ fn czi_bgr24_color_geometry_and_plane() {
     assert_eq!(meta.scene_count(), 1, "c_winnt.czi is a single scene");
 
     let scene = meta.scene(0).unwrap();
-    // Ground truth: 275x174 Bgr24, single subblock. Color is carried as 3
-    // samples per pixel, NOT as extra C channels (C stays 1).
+    // Ground truth: Bgr24 is 3 samples per pixel, not extra C channels (C stays 1).
     assert_eq!(scene.dims.c, 1, "color must NOT explode into C channels");
     assert_eq!(scene.dims.z, 1);
     assert_eq!(scene.dims.t, 1);

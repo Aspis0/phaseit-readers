@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The batch mode: a list of files, one JSON line each.
-//!
-//! The list is a text file with one path per line; blank lines are skipped.
-//! Every path is reported on its own line, so a reader that hangs on one file
-//! is the sweep script's problem (it runs one child process per file), and a
-//! reader that panics on one file is this module's problem: the panic is
-//! caught and reported as an error line, so one file cannot end the run.
+//! One JSON line per listed file. A panicking reader becomes an error line; a hang is the sweep script's
+//! problem, since it runs one child process per file.
 
 use std::io::{BufRead, BufWriter, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -14,12 +9,7 @@ use std::path::Path;
 use super::json;
 use super::report;
 
-/// Report every path of the list file, one JSON line each.
-///
-/// `regions` says whether each window the sweep reads is compared with the
-/// same window cropped out of the whole plane. The comparison is ON by
-/// default; a timing run turns it OFF, so that two builds do exactly the
-/// same work per file and their open times can be compared.
+/// `regions` compares each sweep window with the same crop of the whole plane; a timing run turns that off.
 pub fn run(list_path: &Path, regions: bool) -> std::io::Result<()> {
     let list = std::fs::File::open(list_path)?;
     let stdout = std::io::stdout();
@@ -35,10 +25,7 @@ pub fn run(list_path: &Path, regions: bool) -> std::io::Result<()> {
     out.flush()
 }
 
-/// One file's report. A panic in the reader becomes an error line.
-///
-/// The guard is the binary's half of the per-file isolation: a reader that
-/// panics on one file must not take the run down with it.
+/// A reader panic is caught here, so it cannot take the whole run down.
 pub fn guarded_report(path: &Path, regions: bool) -> String {
     match catch_unwind(AssertUnwindSafe(|| report::file_report(path, regions))) {
         Ok(line) => line,
@@ -46,7 +33,6 @@ pub fn guarded_report(path: &Path, regions: bool) -> String {
     }
 }
 
-/// The report of a file whose reader panicked.
 fn panic_report(path: &Path, payload: &(dyn std::any::Any + Send)) -> String {
     let message = if let Some(text) = payload.downcast_ref::<&str>() {
         (*text).to_string()

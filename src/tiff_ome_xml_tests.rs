@@ -168,3 +168,49 @@ fn every_image_is_listed_in_file_order_with_its_tiff_data() {
     assert_eq!(images[0].tiff_data[1].first_t.as_deref(), Some("1"));
     assert!(images[1].tiff_data.is_empty());
 }
+
+#[test]
+fn the_entities_of_an_attribute_and_of_a_text_node_are_resolved() {
+    // `&amp;`, `&lt;` and the numeric `&#233;` are what a file states in an
+    // attribute and in a text node; the reader must see what they mean.
+    let xml = r#"<OME UUID="urn:x&amp;y">
+      <Image Name="A&amp;B &lt;C&gt; &#233;"><Pixels SizeX="1" SizeY="1">
+        <Channel Name="DAPI &amp; E&#233;"/>
+        <TiffData IFD="0"><UUID>urn:z&amp;w&#233;</UUID></TiffData>
+      </Pixels></Image>
+    </OME>"#;
+    let document = parse_images(xml).expect("a description with entities is read");
+    assert_eq!(document.uuid.as_deref(), Some("urn:x&y"));
+    assert_eq!(document.images[0].name.as_deref(), Some("A&B <C> é"));
+    assert_eq!(document.images[0].channels[0].name.as_deref(), Some("DAPI & Eé"));
+    assert_eq!(document.images[0].tiff_data[0].uuid.as_deref(), Some("urn:z&wé"));
+}
+
+#[test]
+fn a_cdata_section_states_its_text_as_it_is() {
+    // A CDATA section is text that is not escaped, so it needs no resolving -
+    // and it is the text of the element all the same.
+    let xml = r#"<OME><Image Name="a"><Pixels SizeX="1" SizeY="1">
+        <TiffData IFD="0"><UUID><![CDATA[urn:uuid:1]]></UUID></TiffData>
+      </Pixels></Image></OME>"#;
+    let document = parse_images(xml).expect("a description with a CDATA section is read");
+    assert_eq!(document.images[0].tiff_data[0].uuid.as_deref(), Some("urn:uuid:1"));
+}
+
+#[test]
+fn an_entity_that_cannot_be_resolved_is_read_as_it_was_written() {
+    // An unknown entity must not panic and must not take the file down: the
+    // value is taken as it was written.
+    let xml = r#"<OME UUID="urn:x&bogus;y">
+      <Image Name="A&bogus;B"><Pixels SizeX="1" SizeY="1">
+        <TiffData IFD="0"><UUID>urn:z&bogus;w</UUID></TiffData>
+      </Pixels></Image>
+    </OME>"#;
+    let document = parse_images(xml).expect("a description with a bad entity is read");
+    assert_eq!(document.uuid.as_deref(), Some("urn:x&bogus;y"));
+    assert_eq!(document.images[0].name.as_deref(), Some("A&bogus;B"));
+    assert_eq!(
+        document.images[0].tiff_data[0].uuid.as_deref(),
+        Some("urn:z&bogus;w")
+    );
+}

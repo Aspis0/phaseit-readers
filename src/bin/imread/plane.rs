@@ -1,25 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A decoded plane: the bytes it is made of, and what those bytes say about
-//! it.
-//!
-//! The bytes are the plane's samples in native (host) order — the same bytes
-//! `imread dump` writes — so a plane hashed here and a plane dumped by the
-//! Bio-Formats side hash alike.
+//! A decoded plane: its samples in native (host) order, the same bytes `imread dump` writes,
+//! so a hash here matches a Bio-Formats dump of the same plane.
 
 use phasit_imread::PlaneBuf;
 
-/// The smallest, largest and mean sample value of a plane.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Stats {
-    /// The smallest sample value.
     pub min: f64,
-    /// The largest sample value.
     pub max: f64,
-    /// The arithmetic mean of the samples. `NaN` when a sample is `NaN`.
     pub mean: f64,
 }
 
-/// The plane's samples as a flat byte vector, in native-endian order.
 pub fn to_ne_bytes(buf: &PlaneBuf) -> Vec<u8> {
     match buf {
         PlaneBuf::U8(v) => v.clone(),
@@ -29,10 +20,7 @@ pub fn to_ne_bytes(buf: &PlaneBuf) -> Vec<u8> {
     }
 }
 
-/// The statistics of the plane's samples.
-///
-/// The mean is taken over `f64` so that a 16-bit plane cannot overflow the
-/// accumulator.
+/// The mean is summed in `f64`, so a 16-bit plane cannot overflow the accumulator.
 pub fn statistics(buf: &PlaneBuf) -> Stats {
     match buf {
         PlaneBuf::U8(v) => stats_of(v.iter().map(|s| *s as f64), v.len()),
@@ -42,11 +30,7 @@ pub fn statistics(buf: &PlaneBuf) -> Stats {
     }
 }
 
-/// The statistics of `count` samples given as `f64`.
-///
-/// `min`/`max` ignore a `NaN` sample (Rust's `f64::min`/`max` keep the other
-/// operand), while the mean stays `NaN` — a plane with a `NaN` in it has no
-/// mean, and the JSON writes that as `null`.
+/// `min`/`max` skip a `NaN` sample (`f64::min` keeps the other operand); the mean stays `NaN`, written as `null`.
 fn stats_of(values: impl Iterator<Item = f64>, count: usize) -> Stats {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;

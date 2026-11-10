@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The CZ-LSM-Info struct of an LSM file: how long it is, and what a file
-//! that states nothing in it publishes.
-//!
-//! The files are synthetic (see `support::lsm`); the real ones are gated
-//! behind `PHASIT_REAL_DATA_DIR` and live in `lsm_real.rs`.
+//! The CZ-LSM-Info struct of an LSM file: how long it is, and what a file that states nothing in it publishes.
+//! The files are synthetic; the real ones are gated behind `PHASIT_REAL_DATA_DIR` and live in `lsm_real.rs`.
 
 mod support;
 
@@ -14,11 +11,8 @@ use phasit_imread::{Error, ImageReader};
 use support::lsm::{build, LsmSpec};
 use support::scratch_dir;
 
-/// The offset of the voxel size Z inside the CZ-LSM-Info struct (f64, metres).
 const CZ_VOXEL_Z_AT: usize = 56;
 
-/// Write a synthetic LSM whose CZ-LSM-Info states `voxel_z_m` as its Z voxel
-/// size (the X and Y voxel sizes are the fixture's own).
 fn write_an_lsm_with_voxel_z(path: &Path, voxel_z_m: f64) {
     let (mut bytes, offsets) = build(&LsmSpec::plain(2, 2, 1));
     let at = offsets.cz + CZ_VOXEL_Z_AT;
@@ -30,11 +24,7 @@ fn write_an_lsm_with_voxel_z(path: &Path, voxel_z_m: f64) {
 fn a_short_struct_states_no_tile_counts_and_no_channel_block() {
     let dir = scratch_dir("lsm_short_struct");
     let path = dir.join("shortstruct.lsm");
-    // The struct declares 108 bytes, so the channel-colours pointer (at +108)
-    // and the tile counts (at +264/+268) are beyond it. The bytes there say
-    // "one position, four tiles" and point at a colour block — the reader
-    // must not read them: the file states neither. The file itself holds one
-    // page, which is what a file without tile counts must hold.
+    // The struct declares 108 bytes, so the colour pointer and tile counts beyond it must not be read.
     let spec = LsmSpec {
         x: 2,
         y: 2,
@@ -86,9 +76,7 @@ fn a_struct_with_the_wrong_magic_is_refused() {
 
 #[test]
 fn an_lsm_with_a_placeholder_z_step_says_so() {
-    // 1e-19 m is the sentinel some writers put in the Z field: 1e-13 um, no
-    // distance a microscope measured. The X/Y voxel sizes are real and are
-    // still published, and the scene SAYS that its Z step was not used.
+    // 1e-19 m is a writers' sentinel, not a distance: the X/Y sizes are still published and the Z step is not.
     let dir = scratch_dir("lsm_placeholder_z");
     let path = dir.join("placeholderz.lsm");
     write_an_lsm_with_voxel_z(&path, 1e-19);
@@ -117,9 +105,7 @@ fn an_lsm_with_a_placeholder_z_step_says_so() {
 
 #[test]
 fn an_lsm_with_an_invalid_voxel_z_still_publishes_its_xy_size() {
-    // A zero voxel Z states no Z step at all. The X/Y sizes are real, so the
-    // file publishes them: the pixel size is published with the Z step
-    // ABSENT (the wire writes z: null), never as "no pixel size at all".
+    // A zero Z states no Z step: the X/Y size is still published, with `z: null`, never as no pixel size.
     let dir = scratch_dir("lsm_invalid_z");
     let path = dir.join("invalidz.lsm");
     write_an_lsm_with_voxel_z(&path, 0.0);

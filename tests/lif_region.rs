@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The LIF reader reads a sub-region without decoding the whole plane.
-//!
-//! A LIF frame is stored contiguously (the reader refuses an image whose X or
-//! Y dimension is not contiguous), so the rows of a rectangle sit at computable
-//! offsets in the image's memory block. Every rectangle the reader accepts
-//! must therefore give exactly the same bytes as cropping the whole plane.
+//! The LIF reader reads a sub-region without decoding the whole plane: every accepted rectangle must give the bytes of
+//! cropping the plane.
+//! A LIF frame is stored contiguously (a non-contiguous X or Y is refused), so a rectangle's rows sit at computable
+//! offsets.
 
 mod support;
 
@@ -15,7 +13,6 @@ use phasit_imread::{Error, ImageReader, Plane, PlaneBuf};
 use support::lif::{write_lif, LifImage};
 use support::scratch::Scratch;
 
-/// A scratch LIF file of this test run.
 fn scratch(name: &str) -> Scratch {
     Scratch::new(std::env::temp_dir().join(format!(
         "phasit_lif_region_{name}_{}",
@@ -23,8 +20,7 @@ fn scratch(name: &str) -> Scratch {
     )))
 }
 
-/// Assert that a region and the cropped plane are the same — WITHOUT printing
-/// the pixels: the message names the difference, never the data.
+/// Compares without printing the pixels: a failure names the difference, never the data.
 fn assert_same(got: &Plane, want: &Plane, what: &str) {
     assert_eq!(got.shape, want.shape, "{what}: the region's shape differs");
     assert_eq!(
@@ -37,7 +33,6 @@ fn assert_same(got: &Plane, want: &Plane, what: &str) {
     );
 }
 
-/// Write a LIF holding one image and open it.
 fn open(image: &LifImage, name: &str) -> (Scratch, LifReader) {
     let path = scratch(name);
     write_lif(&path, std::slice::from_ref(image));
@@ -85,8 +80,7 @@ fn a_region_equals_the_cropped_plane() {
 
 #[test]
 fn a_region_equals_the_cropped_plane_across_channels_and_z() {
-    // Two channels and two Z planes: the channel and the Z plane each move
-    // the frame inside the memory block, so the region must follow them.
+    // Channel and Z each move the frame inside the memory block, so the region must follow them.
     let image = LifImage::gray8("image", "block", 4, 3, Some(2), None, 2);
     let (_path, reader) = open(&image, "channels");
 
@@ -126,8 +120,7 @@ fn a_region_equals_the_cropped_plane_across_time_points() {
 
 #[test]
 fn a_u16_region_equals_the_cropped_plane() {
-    // Sixteen-bit samples: the region converts the bytes to native endianness
-    // exactly like the whole plane does.
+    // Sixteen-bit samples: the region converts bytes to native endianness exactly as the whole plane does.
     let mut image = LifImage::gray8("image", "block", 4, 3, None, None, 1);
     image.itemsize = 2;
     image.pixels = (0..12u16)
@@ -144,10 +137,7 @@ fn a_u16_region_equals_the_cropped_plane() {
 
 #[test]
 fn a_full_width_region_below_the_first_row_equals_the_cropped_plane() {
-    // A FULL-WIDTH rectangle that does NOT start at row 0: the reader reads the
-    // rect's rows as one contiguous span, so the row offset has to be in
-    // there. A reader that dropped the `rect.y` term would return the first
-    // rows instead.
+    // A full-width rect not at row 0: a reader that dropped the `rect.y` term would return the first rows.
     let image = LifImage::gray8("image", "block", 5, 4, None, None, 1);
     let (_path, reader) = open(&image, "full_width_below");
 
@@ -166,8 +156,6 @@ fn a_full_width_region_below_the_first_row_equals_the_cropped_plane() {
 
 #[test]
 fn an_f32_region_equals_the_cropped_plane() {
-    // Thirty-two-bit float samples: the region converts the bytes to native
-    // endianness exactly like the whole plane does.
     let mut image = LifImage::gray8("image", "block", 4, 3, None, None, 1);
     image.itemsize = 4;
     image.pixels = (0..12usize)
@@ -188,7 +176,6 @@ fn an_invalid_coordinate_is_out_of_range() {
     let image = LifImage::gray8("image", "block", 4, 3, None, None, 1);
     let (_path, reader) = open(&image, "coordinate");
 
-    // A coordinate outside the scene is `OutOfRange`, never a panic.
     assert!(matches!(
         reader.region(0, 1, 0, 0, PixelRect::new(0, 0, 1, 1)),
         Err(Error::OutOfRange { t: 1, .. })
@@ -206,8 +193,7 @@ fn an_invalid_coordinate_is_out_of_range() {
         Err(Error::SceneOutOfRange { scene: 1, .. })
     ));
 
-    // The coordinate is checked BEFORE the rect: a call that is wrong in both
-    // ways reports the coordinate, like the trait default does.
+    // The coordinate is checked before the rect, as the trait default does.
     assert!(matches!(
         reader.region(0, 9, 0, 0, PixelRect::new(99, 99, 1, 1)),
         Err(Error::OutOfRange { .. })
@@ -219,7 +205,6 @@ fn a_rect_outside_the_plane_is_a_decode_error() {
     let image = LifImage::gray8("image", "block", 4, 3, None, None, 1);
     let (_path, reader) = open(&image, "rect");
 
-    // A rect past the plane's extent is a clean `Decode` error.
     assert!(matches!(
         reader.region(0, 0, 0, 0, PixelRect::new(3, 0, 2, 1)),
         Err(Error::Decode(_))

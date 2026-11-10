@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The TIFF reader reads a sub-region without decoding the whole page.
-//!
-//! A TIFF page is stored in strips or tiles, so the pixels of a rectangle sit
-//! in the chunks that overlap it. Every rectangle the reader accepts must
-//! therefore give exactly the same bytes as cropping the whole plane — and a
-//! chunk read at the wrong place must give DIFFERENT bytes, which is why the
-//! fixtures carry a pattern that changes with every row, column and sample.
+//! A TIFF page is stored in strips or tiles, so a rectangle's pixels sit in the chunks that overlap it. Every
+//! rectangle must give the same bytes as cropping the whole plane — and a chunk read at the wrong place must give
+//! DIFFERENT bytes, which is why the fixtures carry a pattern that changes with every row, column and sample.
 
 mod support;
 
@@ -19,13 +16,11 @@ use support::tiff_page::{Layout, Page, SampleType};
 use support::tiff_striped::{write_striped, StripedPage};
 use tiff::encoder::{Compression, DeflateLevel};
 
-/// The fixtures' size: neither the width nor the height divides by the strip
-/// or tile size, so the last strip or tile of a page is a partial one.
+/// The fixtures' size: neither width nor height divides by the strip or tile size, so the last one is partial.
 const WIDTH: u32 = 17;
 const HEIGHT: u32 = 11;
 
-/// Assert that a region and the cropped plane are the same — WITHOUT printing
-/// the pixels: the message names the difference, never the data.
+/// Assert a region equals the cropped plane — without printing the pixels: the message names the difference.
 fn assert_same(got: &Plane, want: &Plane, what: &str) {
     assert_eq!(got.shape, want.shape, "{what}: the region's shape differs");
     assert_eq!(
@@ -38,9 +33,8 @@ fn assert_same(got: &Plane, want: &Plane, what: &str) {
     );
 }
 
-/// The rectangles every layout is checked with: the whole plane, one pixel at
-/// each corner, a single row and a single column, and windows that fall on
-/// no strip or tile boundary.
+/// The rectangles every layout is checked with: the whole plane, one pixel at each corner, a single row and a single
+/// column, and windows that fall on no strip or tile boundary.
 fn rects() -> [PixelRect; 8] {
     let (w, h) = (WIDTH as usize, HEIGHT as usize);
     [
@@ -128,8 +122,7 @@ fn a_region_of_a_compressed_page_equals_the_cropped_plane() {
 
 #[test]
 fn a_region_of_a_tiled_page_equals_the_cropped_plane() {
-    // 8x8 tiles on a 17x11 page: the tiles do not divide the plane, so the
-    // last row and column of tiles are partial ones.
+    // 8x8 tiles on a 17x11 page: the tiles do not divide the plane, so the last row and column are partial.
     let dir = scratch_dir("tiff_region_tiled");
     let path = dir.join("tiled.tif");
     write_page(
@@ -206,8 +199,7 @@ fn a_region_of_a_float_page_equals_the_cropped_plane() {
 
 #[test]
 fn a_region_of_a_planar_page_equals_the_cropped_plane() {
-    // One sample per pixel in its own plane: the layout is the same as the
-    // chunky one, and the reader serves it.
+    // One sample per pixel in its own plane: the layout is the same as the chunky one, and the reader serves it.
     let dir = scratch_dir("tiff_region_planar");
     let path = dir.join("planar.tif");
     let mut page = striped(4);
@@ -219,9 +211,8 @@ fn a_region_of_a_planar_page_equals_the_cropped_plane() {
 
 #[test]
 fn a_planar_multi_sample_page_is_refused() {
-    // The page states that each sample sits in its own plane, with three
-    // samples per pixel: this reader cannot address that, and says so
-    // instead of reading the interleaved bytes as if they were planar.
+    // The page states that each sample sits in its own plane, with three samples per pixel: this reader cannot address
+    // that, and says so instead of reading the interleaved bytes as if they were planar.
     let dir = scratch_dir("tiff_region_planar_rgb");
     let path = dir.join("planar_rgb.tif");
     write_page(
@@ -246,8 +237,7 @@ fn a_planar_multi_sample_page_is_refused() {
 
 #[test]
 fn a_region_of_a_second_page_equals_the_cropped_plane() {
-    // Two pages are two Z planes of one scene, so the second page's chunks
-    // must be read as the second plane.
+    // Two pages are two Z planes of one scene, so the second page's chunks must be read as the second plane.
     let dir = scratch_dir("tiff_region_pages");
     let path = dir.join("pages.tif");
     write_striped(
@@ -288,8 +278,7 @@ fn a_region_outside_the_plane_is_refused() {
     write_striped(&path, None, &[striped(4)], Compression::Uncompressed);
     let reader = TiffReader::open(&path).expect("open the TIFF");
 
-    // Past the right edge, past the bottom edge, and a rect whose extent
-    // overflows the arithmetic.
+    // Past the right edge, past the bottom edge, and a rect whose extent overflows the arithmetic.
     for rect in [
         PixelRect::new(WIDTH as usize, 0, 1, 1),
         PixelRect::new(0, HEIGHT as usize, 1, 1),
@@ -313,8 +302,7 @@ fn a_region_of_a_plane_that_is_not_there_is_refused() {
     write_striped(&path, None, &[striped(4)], Compression::Uncompressed);
     let reader = TiffReader::open(&path).expect("open the TIFF");
 
-    // A scene that is not there is a scene out of range; a coordinate inside
-    // a scene that exists is a coordinate out of range.
+    // A scene that is not there is a scene out of range; a coordinate inside a scene that exists is out of range.
     let err = reader
         .region(1, 0, 0, 0, PixelRect::new(0, 0, 1, 1))
         .expect_err("a scene that is not there is refused");

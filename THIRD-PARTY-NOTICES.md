@@ -159,10 +159,13 @@ copyleft. The licence strings below are the ones each crate declares in its own
 
 The tables below cover every target this crate is built for: Windows
 (`x86_64-pc-windows-msvc`), Linux (`x86_64-unknown-linux-gnu`) and macOS
-(`x86_64-apple-darwin`, `aarch64-apple-darwin`). The four graphs are identical
-except for one crate: the unix targets additionally resolve `libc`, which
-`memmap2` pulls in for its platform layer. `libc` is therefore listed in the
-runtime table, and that row therefore applies to the unix targets.
+(`x86_64-apple-darwin`, `aarch64-apple-darwin`), and they are read off the
+Linux graph. The runtime graph is the same on every target except that the
+unix targets additionally resolve `libc`, which `memmap2` pulls in for its
+platform layer: `libc` is therefore listed in the runtime table, and that row
+applies to the unix targets. The development graph resolves the platform
+crates of the whole lockfile, so `windows-sys` and `windows-link` are listed
+there on every target.
 
 ### Runtime dependencies (default build)
 
@@ -171,33 +174,34 @@ runtime table, and that row therefore applies to the unix targets.
 | Crate | Version | License (as declared) |
 |---|---|---|
 | `byteorder` | 1.5.0 | Unlicense OR MIT |
-| `flate2` | 1.1.9 | MIT OR Apache-2.0 |
-| `crc32fast` | 1.5.0 | MIT OR Apache-2.0 |
-| `cfg-if` | 1.0.4 | MIT OR Apache-2.0 |
-| `miniz_oxide` | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
+| `flate2` | 1.1.10 | MIT OR Apache-2.0 |
+| `crc32fast` | 1.5.3 | MIT OR Apache-2.0 |
+| `cfg-if` | 1.0.5 | MIT OR Apache-2.0 |
+| `miniz_oxide` | 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | `adler2` | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
-| `simd-adler32` | 0.3.9 | MIT |
-| `memmap2` | 0.9.11 | MIT OR Apache-2.0 |
-| `libc` | 0.2.186 | MIT OR Apache-2.0 |
-| `quick-xml` | 0.41.0 | MIT |
-| `memchr` | 2.8.2 | Unlicense OR MIT |
-| `ruzstd` | 0.8.3 | MIT |
-| `twox-hash` | 2.1.2 | MIT |
-| `thiserror` | 2.0.18 | MIT OR Apache-2.0 |
-| `thiserror-impl` | 2.0.18 | MIT OR Apache-2.0 |
-| `proc-macro2` | 1.0.106 | MIT OR Apache-2.0 |
-| `unicode-ident` | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
-| `quote` | 1.0.46 | MIT OR Apache-2.0 |
-| `syn` | 2.0.118 | MIT OR Apache-2.0 |
+| `simd-adler32` | 0.3.10 | MIT |
+| `memmap2` | 0.9.12 | MIT OR Apache-2.0 |
+| `libc` | 0.2.191 | MIT OR Apache-2.0 |
+| `quick-xml` | 0.42.0 | MIT |
+| `memchr` | 2.8.3 | Unlicense OR MIT |
+| `ruzstd` | 0.9.1 | MIT |
+| `twox-hash` | 2.1.5 | MIT |
+| `thiserror` | 2.0.21 | MIT OR Apache-2.0 |
+| `thiserror-impl` | 2.0.21 | MIT OR Apache-2.0 |
+| `proc-macro2` | 1.0.107 | MIT OR Apache-2.0 |
+| `unicode-ident` | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
+| `quote` | 1.0.47 | MIT OR Apache-2.0 |
+| `syn` | 2.0.119 | MIT OR Apache-2.0 |
+| `syn` | 3.0.9 | MIT OR Apache-2.0 |
 | `tiff` | 0.11.3 | MIT |
 | `fax` | 0.2.7 | MIT |
 | `half` | 2.7.1 | MIT OR Apache-2.0 |
-| `zerocopy` | 0.8.52 | BSD-2-Clause OR Apache-2.0 OR MIT |
-| `zerocopy-derive` | 0.8.52 | BSD-2-Clause OR Apache-2.0 OR MIT |
+| `zerocopy` | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
+| `zerocopy-derive` | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | `quick-error` | 2.0.1 | MIT/Apache-2.0 |
 | `weezl` | 0.1.12 | MIT OR Apache-2.0 |
 | `zune-jpeg` | 0.5.15 | MIT OR Apache-2.0 OR Zlib |
-| `zune-core` | 0.5.1 | MIT OR Apache-2.0 OR Zlib |
+| `zune-core` | 0.5.3 | MIT OR Apache-2.0 OR Zlib |
 
 ### Optional: the `ndarray` feature
 
@@ -206,11 +210,11 @@ runtime table, and that row therefore applies to the unix targets.
 | Crate | Version | License (as declared) |
 |---|---|---|
 | `ndarray` | 0.17.2 | MIT OR Apache-2.0 |
-| `matrixmultiply` | 0.3.10 | MIT/Apache-2.0 |
+| `matrixmultiply` | 0.3.11 | MIT/Apache-2.0 |
 | `rawpointer` | 0.2.1 | MIT/Apache-2.0 |
 | `num-complex` | 0.4.6 | MIT OR Apache-2.0 |
 | `num-traits` | 0.2.19 | MIT OR Apache-2.0 |
-| `num-integer` | 0.1.46 | MIT OR Apache-2.0 |
+| `num-integer` | 0.1.47 | MIT OR Apache-2.0 |
 
 ### Build dependencies
 
@@ -227,8 +231,8 @@ that this adds over
 | Crate | Version | License (as declared) | Reached through |
 |---|---|---|---|
 | `autocfg` | 1.5.1 | Apache-2.0 OR MIT | `ndarray`: build dependency of `matrixmultiply` and `num-traits` |
-| `cc` | 1.2.65 | MIT OR Apache-2.0 | `jpegxr`: build dependency of this crate |
-| `find-msvc-tools` | 0.1.9 | MIT OR Apache-2.0 | `jpegxr`: dependency of `cc` |
+| `cc` | 1.8.0 | MIT OR Apache-2.0 | `jpegxr`: build dependency of this crate |
+| `find-msvc-tools` | 0.1.15 | MIT OR Apache-2.0 | `jpegxr`: dependency of `cc` |
 | `shlex` | 2.0.1 | MIT OR Apache-2.0 | `jpegxr`: dependency of `cc` |
 
 ### Development dependencies only
@@ -242,45 +246,32 @@ that is absent from
 
 | Crate | Version | License (as declared) |
 |---|---|---|
-| `zlib-rs` | 0.6.5 | Zlib |
 | `ndarray-npy` | 0.10.0 | MIT OR Apache-2.0 |
 | `py_literal` | 0.4.0 | MIT OR Apache-2.0 |
-| `num-bigint` | 0.4.6 | MIT OR Apache-2.0 |
-| `pest` | 2.8.6 | MIT OR Apache-2.0 |
+| `num-bigint` | 0.4.8 | MIT OR Apache-2.0 |
+| `pest` | 2.9.5 | MIT OR Apache-2.0 |
 | `ucd-trie` | 0.1.7 | MIT OR Apache-2.0 |
-| `pest_derive` | 2.8.6 | MIT OR Apache-2.0 |
-| `pest_generator` | 2.8.6 | MIT OR Apache-2.0 |
-| `pest_meta` | 2.8.6 | MIT OR Apache-2.0 |
-| `sha2` | 0.10.9 | MIT OR Apache-2.0 |
-| `cpufeatures` | 0.2.17 | MIT OR Apache-2.0 |
-| `digest` | 0.10.7 | MIT OR Apache-2.0 |
-| `block-buffer` | 0.10.4 | MIT OR Apache-2.0 |
-| `generic-array` | 0.14.7 | MIT |
-| `typenum` | 1.20.1 | MIT OR Apache-2.0 |
-| `version_check` | 0.9.5 | MIT/Apache-2.0 |
-| `crypto-common` | 0.1.7 | MIT OR Apache-2.0 |
-| `zip` | 6.0.0 | MIT |
-| `indexmap` | 2.14.0 | Apache-2.0 OR MIT |
-| `equivalent` | 1.0.2 | Apache-2.0 OR MIT |
-| `hashbrown` | 0.17.1 | MIT OR Apache-2.0 |
-| `zopfli` | 0.8.3 | Apache-2.0 |
-| `bumpalo` | 3.20.3 | MIT OR Apache-2.0 |
-| `log` | 0.4.33 | MIT OR Apache-2.0 |
-| `serde_json` | 1.0.150 | MIT OR Apache-2.0 |
+| `pest_derive` | 2.9.5 | MIT OR Apache-2.0 |
+| `pest_generator` | 2.9.5 | MIT OR Apache-2.0 |
+| `pest_meta` | 2.9.5 | MIT OR Apache-2.0 |
+| `pest_stack_guard` | 1.0.0 | MIT OR Apache-2.0 |
+| `stacker` | 0.1.25 | MIT OR Apache-2.0 |
+| `psm` | 0.1.24 | MIT OR Apache-2.0 |
+| `windows-sys` | 0.61.2 | MIT OR Apache-2.0 |
+| `windows-link` | 0.2.1 | MIT OR Apache-2.0 |
+| `serde_json` | 1.0.154 | MIT OR Apache-2.0 |
 | `itoa` | 1.0.18 | MIT OR Apache-2.0 |
-| `serde_core` | 1.0.228 | MIT OR Apache-2.0 |
-| `zmij` | 1.0.21 | MIT |
+| `serde_core` | 1.0.229 | MIT OR Apache-2.0 |
+| `zmij` | 1.0.23 | MIT |
 
-`zlib-rs` is in the development graph only: the dev-dependency `ndarray-npy`
-pulls in `zip`, and `zip`'s default features enable `flate2`'s `zlib-rs` backend,
-so the test builds compile and link it. A shipped build never resolves `flate2`
-to `zlib-rs` — there it stays on the pure-Rust `miniz_oxide` backend, which is
-the crate listed in the runtime table above.
-
-The `sha2` / `digest` / `block-buffer` / `generic-array` / `typenum` /
-`crypto-common` / `cpufeatures` / `version_check` chain is a build-time
-dependency of `pest_meta`, reached through `ndarray-npy`; it is compiled while
-the tests are built and is never linked into the shipped binary.
+The `pest_stack_guard` / `stacker` / `psm` trio is reached through the
+dev-dependency `ndarray-npy`, which pulls in `py_literal`, which pulls in
+`pest_derive`, which pulls in `pest`, which pulls in `pest_stack_guard` and
+through it `stacker` and `psm`. Both of those compile native code from a build
+script - `psm` assembles native stubs - and `stacker` grows native stacks at
+run time; they are compiled while the tests are built and are never linked
+into the shipped binary. The `windows-sys` / `windows-link` pair is the
+Windows half of that same development graph.
 
 ### Licence texts
 

@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! JSON writing by hand.
-//!
-//! The binary has no JSON dependency, so the few primitives a sweep line needs
-//! are written here: a string literal, a number, and the two optional forms.
-//! Everything this module emits is one line of valid JSON — a sweep record is
-//! read line by line, so a line break inside a record would split it.
+//! JSON written by hand (no dependency). Output stays on one line: sweep records are read line by line.
 
-/// A JSON string literal, with the escapes JSON requires.
 pub fn string(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
@@ -27,7 +21,6 @@ pub fn string(value: &str) -> String {
     out
 }
 
-/// A JSON string, or `null` when there is no string.
 pub fn string_or_null(value: Option<&str>) -> String {
     match value {
         Some(text) => string(text),
@@ -35,8 +28,7 @@ pub fn string_or_null(value: Option<&str>) -> String {
     }
 }
 
-/// A JSON number. JSON has no form for NaN or infinity, so a non-finite value
-/// is written as `null` rather than as something a parser would reject.
+/// NaN and infinity have no JSON form, so a non-finite value is written as `null`.
 pub fn number(value: f64) -> String {
     if value.is_finite() {
         format!("{value}")
@@ -45,15 +37,11 @@ pub fn number(value: f64) -> String {
     }
 }
 
-/// A JSON number from an integer.
 pub fn integer(value: usize) -> String {
     value.to_string()
 }
 
-/// A JSON number, or `null` when there is no number.
-///
-/// A measurement the file does not record is absent, not zero: `null` says
-/// "no value here", where a `0` would read as a measured zero.
+/// An unrecorded measurement is absent, not zero: `null` must not read as a measured `0`.
 pub fn number_or_null(value: Option<f64>) -> String {
     match value {
         Some(value) => number(value),
@@ -61,7 +49,6 @@ pub fn number_or_null(value: Option<f64>) -> String {
     }
 }
 
-/// A JSON array of strings.
 pub fn string_array(values: &[String]) -> String {
     let items = values
         .iter()

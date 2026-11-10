@@ -1,16 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Indexed (palette) pages, decoded from their strips.
-//!
-//! The `tiff` crate refuses the palette photometric interpretation: its
-//! decoder maps `PhotometricInterpretation = 3` to an error before it reads a
-//! single pixel ("Photometric interpretation RGBPalette with bits per sample
-//! [8] is unsupported"). An indexed page IS a page of indices, so this module
-//! reads the strips of such a page itself and publishes the index values —
-//! the pixels stay indices and the palette is published beside them, the way
-//! Bio-Formats keeps them.
-//!
-//! Only the shapes a microscopy corpus actually holds are modelled: 8-bit
-//! indices in an uncompressed page. Anything else is refused BY NAME.
+//! Indexed (palette) pages, read from their strips: the `tiff` crate refuses `PhotometricInterpretation = 3` before
+//! reading a pixel.
+//! Pixels stay indices and the palette is published beside them, as Bio-Formats keeps them. Only 8-bit uncompressed
+//! indices are modelled.
+//! Anything else is refused by name.
 
 use std::io::Cursor;
 
@@ -21,7 +14,6 @@ use crate::tiff_layout::{ChunkGrid, Chunking, ChunkTable, PageLayout};
 use crate::tiff_page::PageFacts;
 use crate::tiff_tags;
 
-/// The index values of one indexed page, row by row.
 pub(crate) fn read_indices(
     dec: &mut Decoder<Cursor<&[u8]>>,
     mmap: &[u8],
@@ -54,18 +46,9 @@ pub(crate) fn read_indices(
     Ok(indices)
 }
 
-/// The strips of an indexed page, when the page's windows can be read out of
-/// them, and `None` when the page keeps the default path.
-///
-/// WHY these checks: a window read copies the page's ROWS out of its strips,
-/// so the strips must hold whole rows (a strip that ends in the middle of a
-/// row does not say where the next row starts), they must hold all the
-/// page's rows, and they must be the strips the GRID reads: the grid cuts the
-/// page into strips of `RowsPerStrip` rows, so the strip table must agree with
-/// that tag, or the plane (which reads the strips one after the other) and
-/// the window (which reads them by the grid) would disagree. The page must
-/// also carry ONE sample per pixel: an indexed page's pixel IS its index, so
-/// a page that states more samples per pixel is not a page of indices.
+/// `None` keeps the default path. A window copies whole rows out of the strips, so the strips must hold whole rows,
+/// all the page's rows, and the `RowsPerStrip` split the grid reads; otherwise plane and window would disagree.
+/// An index is the pixel, so the page must carry one sample per pixel.
 pub(crate) fn window_strips(
     dec: &mut Decoder<Cursor<&[u8]>>,
     facts: &PageFacts,
@@ -81,7 +64,6 @@ pub(crate) fn window_strips(
     if check_page(dec, bits).is_err() {
         return None;
     }
-    // An indexed page is read from its strips: a tiled page is not one.
     let Chunking::Strips { .. } = layout.chunking else {
         return None;
     };
@@ -94,8 +76,6 @@ pub(crate) fn window_strips(
     if table.offsets.len() != count || table.bytes.len() != count {
         return None;
     }
-    // Every strip must hold the rows the grid says it holds: `RowsPerStrip`
-    // rows, the last strip only the rows that are left.
     for index in 0..count {
         let Ok(bytes) = usize::try_from(table.bytes[index]) else {
             return None;
@@ -108,8 +88,6 @@ pub(crate) fn window_strips(
     Some(table)
 }
 
-/// The shape an indexed page must have to be read from its strips: 8-bit
-/// indices in an uncompressed page with no predictor.
 fn check_page(dec: &mut Decoder<Cursor<&[u8]>>, bits: u8) -> Result<()> {
     if bits != 8 {
         return Err(Error::Unsupported(format!(
@@ -131,7 +109,6 @@ fn check_page(dec: &mut Decoder<Cursor<&[u8]>>, bits: u8) -> Result<()> {
     Ok(())
 }
 
-/// The bytes of one strip of an indexed page, bounded by the file's length.
 fn strip_bytes(mmap: &[u8], index: usize, offset: u64, count: usize) -> Result<&[u8]> {
     let start = usize::try_from(offset).map_err(|_| {
         Error::Decode(format!(

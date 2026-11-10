@@ -12,7 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use phasit_imread::tiff_reader::TiffReader;
-use phasit_imread::{DType, Dims5, ImageReader, Plane, PlaneBuf};
+use phasit_imread::{DType, Dims5, ImageMeta, ImageReader, Plane, PlaneBuf};
 use serde_json::Value;
 
 fn fixture_dir() -> PathBuf {
@@ -71,6 +71,122 @@ fn dtype_of(name: &str) -> DType {
     }
 }
 
+/// A fixture that states no readable scene is refused whole, and the refusal names the scene and the reason.
+fn assert_refused_whole(file: &str, path: &Path, refusals: &[Value]) {
+    let error = match TiffReader::open(path) {
+        Ok(_) => panic!("{file}: the fixture must be refused"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    for refusal in refusals {
+        let name = refusal["name"].as_str().expect("name");
+        let reason = refusal["reason"].as_str().expect("reason");
+        assert!(message.contains(name), "{file}: the refusal names the scene");
+        assert!(message.contains(reason), "{file}: the refusal names the reason");
+    }
+}
+
+/// The scenes the manifest says are refused must be refused by name, and the readable ones keep their own index.
+fn assert_refusals(reader: &TiffReader, file: &str, refusals: &[Value]) {
+    assert_eq!(
+        reader.refused_scenes().len(),
+        refusals.len(),
+        "{file}: refused scene count"
+    );
+    for refusal in refusals {
+        let index = refusal["image_index"].as_u64().expect("image_index") as usize;
+        let refused = reader
+            .refused_scenes()
+            .iter()
+            .find(|scene| scene.image_index == index)
+            .unwrap_or_else(|| panic!("{file}: the scene {index} must be refused"));
+        assert_eq!(refused.name, refusal["name"].as_str().expect("name"));
+        assert!(
+            refused.reason.contains(refusal["reason"].as_str().expect("reason")),
+            "{file}: the refusal names the reason: {}",
+            refused.reason
+        );
+    }
+}
+
+/// The per-scene facts: a single-scene fixture states them once, a multi-scene fixture states them per scene.
+fn assert_scene_facts(meta: &ImageMeta, entry: &Value, file: &str, scenes: usize) {
+    let scene_entries: Vec<&Value> = if let Some(list) = entry["sceneDims"].as_array() {
+        list.iter().collect()
+    } else {
+        vec![entry]
+    };
+    assert_eq!(scene_entries.len(), scenes, "{file}: scene entries");
+
+    for (index, expected) in scene_entries.iter().enumerate() {
+        let scene = meta.scene(index).expect("the scene");
+        assert_eq!(scene.dims, dims_of(expected), "{file}: scene {index} dims");
+        let dtype = dtype_of(expected["dtype"].as_str().expect("dtype"));
+        assert_eq!(scene.dtype, dtype, "{file}: scene {index} dtype");
+        let samples = expected["samples"].as_u64().expect("samples") as u32;
+        assert_eq!(scene.samples, samples, "{file}: scene {index} samples");
+    }
+}
+
+/// The palette of an indexed scene, when the manifest states one; no palette otherwise.
+fn assert_palette(meta: &ImageMeta, entry: &Value, file: &str) {
+    if let Some(entries) = entry["paletteEntries"].as_u64() {
+        let palette = meta.scene(0).expect("the scene").palette.as_ref().expect(
+            "an indexed scene publishes its palette beside the index values",
+        );
+        assert_eq!(palette.len(), entries as usize, "{file}: palette length");
+        // The fixture's palette is a grey ramp: index i -> (i, i, i).
+        for (index, colour) in palette.iter().enumerate() {
+            let expected = index as u8;
+            assert_eq!(*colour, [expected, expected, expected], "{file}: palette[{index}]");
+        }
+    } else {
+        assert!(
+            meta.scene(0).expect("the scene").palette.is_none(),
+            "{file}: a scene that states no palette publishes none"
+        );
+    }
+}
+
+/// The calibration, when the manifest states one.
+fn assert_pixel_size(meta: &ImageMeta, entry: &Value, file: &str) {
+    if let Some(px) = entry["pxSizeUm"].as_object() {
+        let published = meta.scene(0).expect("the scene").px_size_um.expect("a pixel size");
+        let want = |key: &str| px[key].as_f64().expect(key);
+        assert!(
+            (published.x as f64 - want("x")).abs() < 1e-4,
+            "{file}: pixel size x"
+        );
+        assert!(
+            (published.y as f64 - want("y")).abs() < 1e-4,
+            "{file}: pixel size y"
+        );
+        assert!(
+            (published.z.expect("the Z step") as f64 - want("z")).abs() < 1e-4,
+            "{file}: pixel size z"
+        );
+    }
+}
+
+/// The pixels themselves: every plane the manifest names, byte for byte.
+fn assert_planes(reader: &TiffReader, entry: &Value, file: &str) {
+    for plane in entry["planes"].as_array().expect("planes") {
+        let scene = plane["scene"].as_u64().unwrap_or(0) as usize;
+        let t = plane["t"].as_u64().expect("t") as usize;
+        let c = plane["c"].as_u64().expect("c") as usize;
+        let z = plane["z"].as_u64().expect("z") as usize;
+        let expected = decode_hex(plane["hex"].as_str().expect("hex"));
+        let read = reader
+            .plane(scene, t, c, z)
+            .unwrap_or_else(|e| panic!("{file}: plane ({scene},{t},{c},{z}): {e}"));
+        assert_eq!(
+            plane_bytes(&read),
+            expected,
+            "{file}: plane ({scene},{t},{c},{z}) bytes"
+        );
+    }
+}
+
 #[test]
 fn every_fixture_reads_exactly_as_its_manifest_says() {
     let manifest = manifest();
@@ -87,20 +203,8 @@ fn every_fixture_reads_exactly_as_its_manifest_says() {
             None => &[],
         };
 
-        // A fixture that states no readable scene must be refused whole, and
-        // the refusal must name the scene and the reason the manifest states.
         if entry["scenes"].as_u64().expect("scenes") == 0 {
-            let error = match TiffReader::open(&path) {
-                Ok(_) => panic!("{file}: the fixture must be refused"),
-                Err(error) => error,
-            };
-            let message = error.to_string();
-            for refusal in refusals {
-                let name = refusal["name"].as_str().expect("name");
-                let reason = refusal["reason"].as_str().expect("reason");
-                assert!(message.contains(name), "{file}: the refusal names the scene");
-                assert!(message.contains(reason), "{file}: the refusal names the reason");
-            }
+            assert_refused_whole(file, &path, refusals);
             continue;
         }
 
@@ -109,99 +213,11 @@ fn every_fixture_reads_exactly_as_its_manifest_says() {
 
         let scenes = entry["scenes"].as_u64().expect("scenes") as usize;
         assert_eq!(meta.scene_count(), scenes, "{file}: scene count");
-
-        // The scenes the manifest says are refused must be refused by name,
-        // and the readable ones must keep their own index.
-        assert_eq!(
-            reader.refused_scenes().len(),
-            refusals.len(),
-            "{file}: refused scene count"
-        );
-        for refusal in refusals {
-            let index = refusal["image_index"].as_u64().expect("image_index") as usize;
-            let refused = reader
-                .refused_scenes()
-                .iter()
-                .find(|scene| scene.image_index == index)
-                .unwrap_or_else(|| panic!("{file}: the scene {index} must be refused"));
-            assert_eq!(refused.name, refusal["name"].as_str().expect("name"));
-            assert!(
-                refused.reason.contains(refusal["reason"].as_str().expect("reason")),
-                "{file}: the refusal names the reason: {}",
-                refused.reason
-            );
-        }
-
-        // The per-scene facts: a single-scene fixture states them once, a
-        // multi-scene fixture states them per scene.
-        let scene_entries: Vec<&Value> = if let Some(list) = entry["sceneDims"].as_array() {
-            list.iter().collect()
-        } else {
-            vec![entry]
-        };
-        assert_eq!(scene_entries.len(), scenes, "{file}: scene entries");
-
-        for (index, expected) in scene_entries.iter().enumerate() {
-            let scene = meta.scene(index).expect("the scene");
-            assert_eq!(scene.dims, dims_of(expected), "{file}: scene {index} dims");
-            let dtype = dtype_of(expected["dtype"].as_str().expect("dtype"));
-            assert_eq!(scene.dtype, dtype, "{file}: scene {index} dtype");
-            let samples = expected["samples"].as_u64().expect("samples") as u32;
-            assert_eq!(scene.samples, samples, "{file}: scene {index} samples");
-        }
-
-        // The palette of an indexed scene, when the manifest states one.
-        if let Some(entries) = entry["paletteEntries"].as_u64() {
-            let palette = meta.scene(0).expect("the scene").palette.as_ref().expect(
-                "an indexed scene publishes its palette beside the index values",
-            );
-            assert_eq!(palette.len(), entries as usize, "{file}: palette length");
-            // The fixture's palette is a grey ramp: index i -> (i, i, i).
-            for (index, colour) in palette.iter().enumerate() {
-                let expected = index as u8;
-                assert_eq!(*colour, [expected, expected, expected], "{file}: palette[{index}]");
-            }
-        } else {
-            assert!(
-                meta.scene(0).expect("the scene").palette.is_none(),
-                "{file}: a scene that states no palette publishes none"
-            );
-        }
-
-        // The calibration, when the manifest states one.
-        if let Some(px) = entry["pxSizeUm"].as_object() {
-            let published = meta.scene(0).expect("the scene").px_size_um.expect("a pixel size");
-            let want = |key: &str| px[key].as_f64().expect(key);
-            assert!(
-                (published.x as f64 - want("x")).abs() < 1e-4,
-                "{file}: pixel size x"
-            );
-            assert!(
-                (published.y as f64 - want("y")).abs() < 1e-4,
-                "{file}: pixel size y"
-            );
-            assert!(
-                (published.z.expect("the Z step") as f64 - want("z")).abs() < 1e-4,
-                "{file}: pixel size z"
-            );
-        }
-
-        // The pixels themselves: every plane the manifest names, byte for byte.
-        for plane in entry["planes"].as_array().expect("planes") {
-            let scene = plane["scene"].as_u64().unwrap_or(0) as usize;
-            let t = plane["t"].as_u64().expect("t") as usize;
-            let c = plane["c"].as_u64().expect("c") as usize;
-            let z = plane["z"].as_u64().expect("z") as usize;
-            let expected = decode_hex(plane["hex"].as_str().expect("hex"));
-            let read = reader
-                .plane(scene, t, c, z)
-                .unwrap_or_else(|e| panic!("{file}: plane ({scene},{t},{c},{z}): {e}"));
-            assert_eq!(
-                plane_bytes(&read),
-                expected,
-                "{file}: plane ({scene},{t},{c},{z}) bytes"
-            );
-        }
+        assert_refusals(&reader, file, refusals);
+        assert_scene_facts(meta, entry, file, scenes);
+        assert_palette(meta, entry, file);
+        assert_pixel_size(meta, entry, file);
+        assert_planes(&reader, entry, file);
     }
 }
 

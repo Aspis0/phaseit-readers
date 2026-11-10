@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What one TIFF page states about its own pixels: its size, its sample type,
-//! its samples per pixel and its photometric interpretation.
-//!
-//! An OME scene takes its colour model from its first page, and the plane
-//! reader checks each page it decodes against the scene that owns it.
+//! An OME scene takes its colour model from its first page; the plane reader checks each page against its scene.
 
 use std::io::Cursor;
 
@@ -14,19 +10,15 @@ use crate::tiff_plain::map_dtype;
 use crate::tiff_tags;
 use crate::types::DType;
 
-/// The facts of the page the decoder is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PageFacts {
     pub width: usize,
     pub height: usize,
     pub dtype: DType,
-    /// Samples per pixel of the page.
     pub samples: usize,
-    /// The `PhotometricInterpretation` tag value.
     pub photometric: u16,
 }
 
-/// Read the facts of the page the decoder is on.
 pub(crate) fn read_page_facts(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<PageFacts> {
     let (width, height) = dec
         .dimensions()
@@ -52,9 +44,7 @@ pub(crate) fn read_page_facts(dec: &mut Decoder<Cursor<&[u8]>>) -> Result<PageFa
 }
 
 impl PageFacts {
-    /// Refuse the page unless it has the shape its scene states, naming the IFD.
-    /// Equal byte counts are not enough: a page of 100x200 read as 200x100 is
-    /// transposed data, not the plane asked for.
+    /// Equal byte counts are not enough: a 100x200 page read as 200x100 is transposed, not the plane asked for.
     pub(crate) fn require_shape(
         &self,
         ifd: usize,
