@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The calibration tag plumbing through the reader, on a file the test
-//! builds itself: the real corpus is isotropic on every axis, so an X/Y
-//! transposition in the reader could otherwise hide behind it.
+//! The calibration tags through the reader, on a file the test builds itself: the real corpus is isotropic, so a
+//! transposition could hide.
 
 mod support;
 
@@ -15,8 +14,7 @@ use tiff::encoder::colortype::Gray8;
 use tiff::encoder::{Rational, TiffEncoder};
 use tiff::tags::ResolutionUnit;
 
-/// A 1×1 grayscale TIFF whose X and Y resolutions differ: 10 000 and 5 000
-/// pixels per centimetre, i.e. 1.0 and 2.0 µm per pixel.
+/// X and Y resolutions differ (1.0 and 2.0 µm per pixel), so an X/Y transposition shows.
 fn write_anisotropic_tiff(path: &Path) {
     let mut file = fs::File::create(path).expect("create the scratch TIFF");
     let mut writer = TiffEncoder::new(&mut file).expect("start the TIFF");
@@ -27,8 +25,6 @@ fn write_anisotropic_tiff(path: &Path) {
     image.write_data(&[0u8]).expect("write the one pixel");
 }
 
-/// A 1×1 grayscale TIFF whose resolution is counted in INCHes: 300 dots per
-/// inch — the layout a picture is printed at.
 fn write_an_inch_tiff(path: &Path) {
     let mut file = fs::File::create(path).expect("create the scratch TIFF");
     let mut writer = TiffEncoder::new(&mut file).expect("start the TIFF");
@@ -41,8 +37,6 @@ fn write_an_inch_tiff(path: &Path) {
 
 #[test]
 fn an_anisotropic_tiff_publishes_each_axis_on_its_own_axis() {
-    // The scratch file is removed with the guard, so a run leaves nothing
-    // behind in the temp folder.
     let path = Scratch::new(
         std::env::temp_dir().join(format!("phasit_t1_anisotropic_{}.tif", std::process::id())),
     );
@@ -65,9 +59,7 @@ fn an_anisotropic_tiff_publishes_each_axis_on_its_own_axis() {
 
 #[test]
 fn an_inch_resolution_is_named_as_a_print_layout() {
-    // A print resolution is not a microscope's pixel size, so the file
-    // publishes no pixel size — and it SAYS so, so a reader of the metadata
-    // knows the file was not calibrated rather than guessing.
+    // A print resolution is not a pixel size: the file publishes none, and says so.
     let path = Scratch::new(
         std::env::temp_dir().join(format!("phasit_t1_inch_{}.tif", std::process::id())),
     );

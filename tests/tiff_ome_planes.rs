@@ -16,7 +16,6 @@ fn page(value: u8) -> GreyPage {
     }
 }
 
-/// The first pixel of plane `(t=0, c=0, z)` of scene `scene`.
 fn first_pixel(path: &std::path::Path, scene: usize, z: usize) -> u8 {
     let reader = TiffReader::open(path).expect("open the OME-TIFF");
     let plane = reader.plane(scene, 0, 0, z).expect("read the plane");
@@ -28,8 +27,7 @@ fn first_pixel(path: &std::path::Path, scene: usize, z: usize) -> u8 {
 
 #[test]
 fn interleaved_out_of_order_scenes_read_their_own_ifds() {
-    // IFD 0 and 2 are scene A's planes, IFD 1 and 3 are scene B's, and A's
-    // TiffData blocks are listed last plane first.
+    // IFD 0 and 2 are scene A's planes; A's TiffData blocks are listed last plane first.
     let dir = scratch_dir("ome_interleaved");
     let path = dir.join("interleaved.ome.tif");
     let xml = r#"<?xml version="1.0"?>
@@ -86,8 +84,7 @@ fn absent_tiff_data_reads_the_file_in_order() {
 
 #[test]
 fn a_malformed_image_leaves_its_neighbours_readable() {
-    // The middle <Image> has no SizeX. The scenes either side still read their
-    // own IFDs, and the reader names the one it refused.
+    // The middle <Image> has no SizeX: the scenes either side still read their own IFDs.
     let dir = scratch_dir("ome_malformed_image");
     let path = dir.join("malformed.ome.tif");
     let xml = r#"<?xml version="1.0"?>
@@ -102,7 +99,6 @@ fn a_malformed_image_leaves_its_neighbours_readable() {
 </OME>"#;
     write_grey(&path, Some(xml), &[page(7), page(8)]);
 
-    // Through open(), the path every caller takes: the refusal is on the reader.
     let reader = phasit_imread::open(&path).expect("open the OME-TIFF");
     assert_eq!(reader.meta().scene_count(), 2);
     assert_eq!(first_pixel(&path, 0, 0), 7);
@@ -117,8 +113,7 @@ fn a_malformed_image_leaves_its_neighbours_readable() {
 
 #[test]
 fn a_declared_plane_count_past_the_cap_is_refused_by_name_at_open() {
-    // SizeZ of a billion would be a 16 GB plane table. The file is a few hundred
-    // bytes, and the scene must be refused before any table is allocated.
+    // SizeZ of a billion would be a 16 GB plane table: the scene must be refused before any table is allocated.
     let dir = scratch_dir("ome_huge_size_z");
     let path = dir.join("huge.ome.tif");
     let xml = r#"<?xml version="1.0"?>
@@ -135,17 +130,12 @@ fn a_declared_plane_count_past_the_cap_is_refused_by_name_at_open() {
     assert!(message.contains("oversized allocation refused"), "{message}");
 }
 
-/// The `<TiffData>` blocks one `<Image>` may name plus one: the crate's plane
-/// budget of one scene (1 Mi planes) and one block past it. The constant is
-/// private to the crate, so it is stated here; the assertion on the refusal
-/// message below fails loudly if the crate's cap ever moves.
+/// One block past the crate's per-scene plane budget (1 Mi planes); the refusal assertion below fails if the cap moves.
 const TIFF_DATA_OVER_THE_PER_IMAGE_CAP: usize = 1_048_577;
 
 #[test]
 fn an_ome_tiff_with_more_tiff_data_than_the_cap_is_refused_at_open_by_name() {
-    // One <Image> naming one <TiffData> per plane, one block past the plane
-    // budget of a scene: each block becomes a struct, so the file is refused
-    // at open, by name, before the list grows past the cap.
+    // One <TiffData> per plane, one block past the scene's plane budget: refused at open, by name.
     let dir = scratch_dir("ome_too_many_tiff_data");
     let path = dir.join("too_many.ome.tif");
     let mut xml = String::from(
@@ -162,14 +152,12 @@ fn an_ome_tiff_with_more_tiff_data_than_the_cap_is_refused_at_open_by_name() {
     let err = TiffReader::open(&path).err().expect("the file is refused at open");
     let message = err.to_string();
     assert!(message.contains("<TiffData>"), "{message}");
-    // The refusal is the cap's own, not some later complaint about the blocks.
     assert!(message.contains("this reader reads at most"), "{message}");
 }
 
 #[test]
 fn a_first_z_block_without_ifd_or_plane_count_takes_the_next_page() {
-    // The spec's default count is the file's IFD count, cut at the scene: the
-    // block with FirstZ=1 is plane 1 at IFD 0. Plane 0 is the block naming IFD 1.
+    // FirstZ=1 names plane 1 at IFD 0: the spec's default count is the file's IFD count, cut at the scene.
     let dir = scratch_dir("ome_first_z_default");
     let path = dir.join("first_z.ome.tif");
     let xml = r#"<?xml version="1.0"?>
@@ -187,8 +175,7 @@ fn a_first_z_block_without_ifd_or_plane_count_takes_the_next_page() {
 
 #[test]
 fn a_scene_longer_than_the_files_pages_is_refused_at_open() {
-    // Three planes, a file of two pages, and no PlaneCount: the default run
-    // covers two planes, so plane 2 has no IFD and the scene is refused.
+    // Three planes, two pages, no PlaneCount: plane 2 has no IFD, so the scene is refused.
     let dir = scratch_dir("ome_default_past_pages");
     let path = dir.join("past_pages.ome.tif");
     let xml = r#"<?xml version="1.0"?>

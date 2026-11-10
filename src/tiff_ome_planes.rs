@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Where an OME scene's planes are: the `DimensionOrder` of its axes, and the
-//! IFD each plane is stored in, as the scene's `<TiffData>` blocks state it.
-//!
-//! The OME-XML shapes read here are ported from the reference reader `tifffile`
-//! (Christoph Gohlke, BSD-3-Clause). Keep this attribution.
+//! Where an OME scene's planes are: its `DimensionOrder` and the IFD of each plane, from its `<TiffData>` blocks.
+//! The OME-XML shapes are ported from `tifffile` (Christoph Gohlke, BSD-3-Clause). Keep this attribution.
 
 use crate::error::{Error, Result};
 use crate::tiff_ome::TiffData;
 
-/// One of the three inter-plane axes, used to interpret an OME
-/// `DimensionOrder`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Axis {
     T,
@@ -17,22 +12,17 @@ pub(crate) enum Axis {
     Z,
 }
 
-/// How one OME scene's planes are addressed.
 #[derive(Debug, Clone)]
 pub(crate) struct OmePlan {
     /// The inter-plane axes, fastest-varying first.
     pub order: [Axis; 3],
-    /// Number of time points.
     pub nt: usize,
-    /// Number of channels.
     pub nc: usize,
-    /// Number of focal planes.
     pub nz: usize,
     /// The IFD of each plane, indexed by its flat `DimensionOrder` index.
     pub ifds: Vec<usize>,
 }
 
-/// Read one `<TiffData>` attribute as a whole number, `default` when absent.
 fn number(raw: Option<&str>, default: usize) -> Result<usize> {
     match raw {
         None => Ok(default),
@@ -42,20 +32,13 @@ fn number(raw: Option<&str>, default: usize) -> Result<usize> {
     }
 }
 
-/// Bytes of one plane-table entry: an `Option<usize>`.
 pub(crate) const PLANE_ENTRY_BYTES: usize = std::mem::size_of::<Option<usize>>();
 
-/// The most bytes one scene's plane table may take. The table is sized from the
-/// `SizeT·SizeC·SizeZ` the XML declares, so that declaration is checked against
-/// this cap before anything is allocated (see `guard.rs`).
+/// The table is sized from the declared `SizeT·SizeC·SizeZ`, so the cap is checked before anything is allocated.
 pub(crate) const MAX_PLANE_TABLE_BYTES: usize = 16 * 1024 * 1024;
 
-/// The most planes one scene may state: its plane table is capped at
-/// [`MAX_PLANE_TABLE_BYTES`] and costs one entry per plane.
 pub(crate) const MAX_PLANES_PER_SCENE: usize = MAX_PLANE_TABLE_BYTES / PLANE_ENTRY_BYTES;
 
-/// The number of planes a scene declares, refused when its plane table would
-/// exceed [`MAX_PLANE_TABLE_BYTES`] or overflow while being sized.
 fn declared_planes(nt: usize, nc: usize, nz: usize) -> Result<usize> {
     let requested = nt
         .checked_mul(nc)
@@ -71,18 +54,13 @@ fn declared_planes(nt: usize, nc: usize, nz: usize) -> Result<usize> {
     Ok(requested / PLANE_ENTRY_BYTES)
 }
 
-/// The blocks that state a scene's planes.
 enum Blocks<'a> {
-    /// The scene's own `<TiffData>` list.
     Named(&'a [TiffData]),
     /// The spec's default: the file's IFDs, as one unnamed block.
     Default,
 }
 
-/// The blocks that state a scene's planes: the scene's own `<TiffData>` list,
-/// or the spec's default — the file's IFDs in order — for a first scene that
-/// names none. A later scene that omits `<TiffData>` does not say where its
-/// planes are, so it is refused.
+/// A later scene that omits `<TiffData>` does not say where its planes are, so it is refused.
 fn plan_blocks<'a>(tiff_data: &'a [TiffData], first_scene: bool) -> Result<Blocks<'a>> {
     match (tiff_data.is_empty(), first_scene) {
         (false, _) => Ok(Blocks::Named(tiff_data)),
@@ -93,13 +71,7 @@ fn plan_blocks<'a>(tiff_data: &'a [TiffData], first_scene: bool) -> Result<Block
     }
 }
 
-/// The IFD of every plane of one scene, from its `<TiffData>` blocks.
-///
-/// The rules are the OME-TIFF specification's for `TiffData`, including its
-/// defaults (<https://docs.openmicroscopy.org/ome-model/5/ome-tiff/specification.html>):
-/// which blocks state the scene's planes (`plan_blocks`), what one block states
-/// (`fill_block`), and the IFD of a plane the blocks leave uncovered
-/// (`finish_plan`).
+/// The OME-TIFF `TiffData` rules and defaults: https://docs.openmicroscopy.org/ome-model/5/ome-tiff/specification.html
 pub(crate) fn scene_plan(
     tiff_data: &[TiffData],
     root_uuid: Option<&str>,
@@ -128,18 +100,9 @@ pub(crate) fn scene_plan(
     })
 }
 
-/// The planes one block states, written into the table.
-///
-/// A block's first plane is `FirstT/FirstC/FirstZ` (default 0), its run
-/// continues in `DimensionOrder`, and the k-th plane of the run is in IFD
-/// `IFD + k` (IFD default 0). Without a `PlaneCount` the run is one plane when
-/// the block names an IFD, and the file's IFDs otherwise (the spec's default is
-/// the number of IFDs in the file); a run the default makes longer than the
-/// scene is cut at the scene's last plane.
-///
-/// A run that goes past the scene, a plane another block already covers, a
-/// block that names another file and an IFD past the file's pages all refuse
-/// the scene: the reader must not guess an IFD.
+/// Without a `PlaneCount`, a block names one plane if it has an IFD, else the file's IFDs; the run is cut at the
+/// scene's end.
+/// Overlaps, another file, or an IFD past the pages refuse the scene: the reader must not guess an IFD.
 fn fill_block(
     ifds: &mut [Option<usize>],
     block: &TiffData,
@@ -194,8 +157,6 @@ fn fill_block(
     Ok(())
 }
 
-/// The IFD of every plane of the scene. A plane no block covers refuses the
-/// scene.
 fn finish_plan(ifds: Vec<Option<usize>>) -> Result<Vec<usize>> {
     ifds.into_iter()
         .enumerate()
@@ -207,8 +168,6 @@ fn finish_plan(ifds: Vec<Option<usize>>) -> Result<Vec<usize>> {
         .collect::<Result<Vec<usize>>>()
 }
 
-/// Parse an OME `DimensionOrder` (e.g. `"XYCZT"`) into the three inter-plane
-/// axes, fastest-varying first (X and Y are intra-plane and dropped).
 pub(crate) fn parse_dim_order(s: &str) -> Result<[Axis; 3]> {
     let mut axes: Vec<Axis> = Vec::with_capacity(3);
     for ch in s.trim().chars() {
@@ -226,10 +185,8 @@ pub(crate) fn parse_dim_order(s: &str) -> Result<[Axis; 3]> {
     }
     match axes.as_slice() {
         [a, b, c] => {
-            // Must be a genuine permutation of {T, C, Z}: three axis tokens are
-            // not enough on their own (e.g. "XYZZT" collects [Z, Z, T]), and an
-            // undetected duplicate silently aliases every channel/plane at that
-            // missing axis onto the same IFD.
+            // Must be a true permutation of {T, C, Z}: three tokens are not enough (`XYZZT` collects [Z, Z, T]),
+            // and a duplicate would silently alias a whole axis onto one IFD.
             let (mut has_t, mut has_c, mut has_z) = (false, false, false);
             for axis in [a, b, c] {
                 match axis {
@@ -252,8 +209,6 @@ pub(crate) fn parse_dim_order(s: &str) -> Result<[Axis; 3]> {
     }
 }
 
-/// Flat IFD index for a `(t, c, z)` under an OME `DimensionOrder` whose
-/// inter-plane axes are `order` (fastest-varying first).
 pub(crate) fn ome_ifd_index(
     order: &[Axis; 3],
     t: usize,
@@ -273,9 +228,7 @@ pub(crate) fn ome_ifd_index(
         Axis::C => nc,
         Axis::Z => nz,
     };
-    // fastest + size_fastest * (mid + size_mid * slowest), with checked
-    // arithmetic so malformed OME-XML (huge SizeT/C/Z) errors instead of
-    // panicking (debug) or wrapping (release).
+    // Checked arithmetic: malformed OME-XML errors here instead of panicking (debug) or wrapping (release).
     let overflow = || Error::Decode("OME dimension index overflow".to_string());
     let inner = sz(order[1])
         .checked_mul(idx(order[2]))

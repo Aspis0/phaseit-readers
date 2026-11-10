@@ -159,6 +159,39 @@
    ]
   },
   {
+   "file": "float32-nan-channel.tif",
+   "what": "two float channels: the second one holds two pixels that are not numbers",
+   "scenes": 1,
+   "dims": {
+    "t": 1,
+    "c": 2,
+    "z": 1,
+    "y": 3,
+    "x": 4
+   },
+   "dtype": "F32",
+   "samples": 1,
+   "pxSizeUm": {
+    "x": 1.5,
+    "y": 1.5,
+    "z": 1.5
+   },
+   "planes": [
+    {
+     "t": 0,
+     "c": 0,
+     "z": 0,
+     "hex": "000000000000803e0000003f0000403f0000803e0000003f0000403f0000803f0000003f0000403f0000803f0000a03f"
+    },
+    {
+     "t": 0,
+     "c": 1,
+     "z": 0,
+     "hex": "0000c07f0000803e0000003f0000403f0000803e0000c07f0000403f0000803f0000003f0000403f0000803f0000a03f"
+    }
+   ]
+  },
+  {
    "file": "two-series.ome.tif",
    "what": "an OME-TIFF with two scenes: the second scene's plane is the second IFD",
    "scenes": 2,

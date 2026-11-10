@@ -1,45 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The ImageJ description (tag 270) and the stack layout it states.
-//!
-//! ImageJ writes its own description into the TIFF it produces: a first line
-//! that names the writer (`ImageJ=1.54p`), then one `key=value` line per
-//! property. The layout properties say how the file's pages are stacked:
-//!
-//! - `channels` — how many channels the stack has;
-//! - `slices` — how many focal planes (Z);
-//! - `frames` — how many time points (T);
-//! - `images` — how many pages the file holds in all;
-//! - `hyperstack` — whether the stack is a hyperstack at all.
-//!
-//! The pages of an ImageJ stack are ordered CHANNEL-FIRST: the page of
-//! channel `c`, slice `z` and frame `t` is page `c + z * channels +
-//! t * channels * slices`. That is the order Bio-Formats reports as
-//! `DimensionOrder=XYCZT` for the same file, so the two readers address the
-//! same plane with the same coordinates.
+//! ImageJ's description (tag 270) states the stack layout. Pages are ordered CHANNEL-FIRST
+//! (`c + z * channels + t * channels * slices`), the order Bio-Formats reports as `XYCZT`, so both readers agree.
 
-/// The stack layout an ImageJ description states.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImageJLayout {
-    /// Number of pages the file holds in all (`images`).
     pub images: Option<usize>,
-    /// Number of channels (`channels`).
     pub channels: Option<usize>,
-    /// Number of focal planes (`slices`).
     pub slices: Option<usize>,
-    /// Number of time points (`frames`).
     pub frames: Option<usize>,
     /// The stack mode (`mode`): "color", "composite", "grayscale".
     pub mode: Option<String>,
 }
 
 impl ImageJLayout {
-    /// The `(channels, slices, frames)` this layout states for a file with
-    /// `pages` pages, or `None` when the layout does not describe that file.
-    ///
-    /// A description that states a shape the file does not have (a `channels`
-    /// count that does not multiply into the page count) describes something
-    /// else: the file's pages are then read as one channel per page, which is
-    /// what the file itself shows.
+    /// `None` when the counts do not multiply into the page count: the pages are then read one channel per page.
     pub fn stack_shape(&self, pages: usize) -> Option<(usize, usize, usize)> {
         let channels = self.channels.unwrap_or(1).max(1);
         let slices = self.slices.unwrap_or(1).max(1);
@@ -57,8 +31,6 @@ impl ImageJLayout {
     }
 }
 
-/// Read the ImageJ layout out of a description, or `None` when the
-/// description is not an ImageJ one.
 pub(crate) fn layout(description: &str) -> Option<ImageJLayout> {
     let mut lines = description.lines();
     let first = lines.next()?.trim();

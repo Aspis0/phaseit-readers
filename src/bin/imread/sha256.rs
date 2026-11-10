@@ -1,11 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! SHA-256 (FIPS 180-4), written here so the crate keeps its dependency set
-//! unchanged for a need that only the CLI has: a hash of a decoded plane's
-//! bytes.
-//!
-//! The implementation is the textbook one: the message is padded to a multiple
-//! of 64 bytes, the padded message is processed in 64-byte blocks, and the
-//! eight working words are printed as big-endian hex.
+//! SHA-256 (FIPS 180-4) for the CLI alone, so the crate keeps its dependency set.
 
 /// The round constants of FIPS 180-4, section 4.2.2.
 const K: [u32; 64] = [
@@ -19,7 +13,6 @@ const K: [u32; 64] = [
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
-/// The SHA-256 digest of `data`, as lower-case hex.
 pub fn sha256_hex(data: &[u8]) -> String {
     let digest = sha256(data);
     let mut out = String::with_capacity(64);
@@ -29,7 +22,6 @@ pub fn sha256_hex(data: &[u8]) -> String {
     out
 }
 
-/// The SHA-256 digest of `data` as eight big-endian words.
 fn sha256(data: &[u8]) -> [u32; 8] {
     let mut h: [u32; 8] = [
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
@@ -44,7 +36,7 @@ fn sha256(data: &[u8]) -> [u32; 8] {
     }
     padded.extend_from_slice(&((data.len() as u64).wrapping_mul(8)).to_be_bytes());
 
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0.iter() {
         let mut w = [0u32; 64];
         for (index, word) in w.iter_mut().take(16).enumerate() {
             let at = index * 4;

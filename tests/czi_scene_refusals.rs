@@ -1,22 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What the CZI reader says about the scenes it could not read.
-//!
-//! The containers are written by hand (the reader's module docs spell the
-//! segment layout out): a `ZISRAWFILE` header, a `ZISRAWDIRECTORY` listing one
-//! entry per tile, one `ZISRAWSUBBLOCK` per tile, and a `ZISRAWMETADATA`
-//! segment. Each tile names the scene (`S`) it belongs to, so a scene can be
-//! made unreadable on purpose.
-//!
-//! A reader that drops a scene without saying so renumbers every scene after
-//! it: the caller asking for scene N of the file then gets a different image.
-//! So a refused scene must be NAMED, and the scenes around it must keep their
-//! own place in the file.
+//! What the CZI reader says about the scenes it could not read: a refused scene is NAMED, and the scenes around it keep
+//! their place.
+//! A reader that drops a scene silently renumbers every scene after it; the containers are written by hand
+//! (`support::czi`).
 
 mod support;
 
 use phasit_imread::czi_reader::CziReader;
 use phasit_imread::{Error, ImageReader};
-use support::czi::{scratch, write_czi, Tile};
+use support::czi::{scratch, Tile};
+use support::czi_write::write_czi;
 
 #[test]
 fn a_heterogeneous_scene_is_refused_with_its_reason() {
@@ -64,8 +57,7 @@ fn a_refused_scene_does_not_renumber_the_scenes_after_it() {
     );
 
     let reader = CziReader::open(&path).expect("the file opens");
-    // The published scenes are the file's scenes 0 and 2: the middle one was
-    // refused, and the last scene must still say it is scene 2 of the file.
+    // The middle scene was refused, and the last scene must still say it is scene 2 of the file.
     assert_eq!(reader.scene_file_index(0), 0);
     assert_eq!(reader.scene_file_index(1), 2);
 }
@@ -104,9 +96,8 @@ fn a_scene_that_lost_a_tile_is_refused_with_the_count_and_the_cause() {
         &path,
         &[
             Tile::full(0, 0, 4, 2),
-            // A Gray32 tile in scene 0: the reader does not model that pixel
-            // type, so the scene loses one of its two tiles. Publishing it
-            // would give a scene smaller than the file says.
+            // A Gray32 tile the reader does not model: publishing the scene with one tile would be smaller than the
+            // file says.
             Tile::full(0, 10, 4, 2),
             Tile::full(1, 0, 4, 2),
         ],
@@ -137,7 +128,6 @@ fn a_scene_that_lost_a_tile_is_refused_with_the_count_and_the_cause() {
         "the reason names the cause: {}",
         refused[0].reason
     );
-    // The scene after it keeps its own place in the file.
     assert_eq!(reader.scene_file_index(0), 1);
 }
 
@@ -148,8 +138,7 @@ fn a_scene_of_pyramid_tiles_only_is_neither_published_nor_refused() {
         &path,
         &[
             Tile::full(0, 0, 4, 2),
-            // Scene 1 holds only a sub-sampled tile: it is not a scene of the
-            // file this reader composes, so it is not a refusal either.
+            // A sub-sampled tile is not a scene this reader composes, so it is not a refusal either.
             Tile::pyramid(1, 0, 4, 2),
         ],
     );
@@ -189,9 +178,7 @@ fn a_file_whose_only_scene_lost_a_tile_fails_with_the_reason_of_that_loss() {
         &path,
         &[
             Tile::full(0, 0, 4, 2),
-            // A Gray32 tile in the only scene of the file: the reader does not
-            // model that pixel type, so the scene loses one of its two tiles
-            // and there is nothing left to open.
+            // A Gray32 tile in the only scene: the scene loses a tile, and nothing is left to open.
             Tile::full(0, 10, 4, 2),
         ],
     );

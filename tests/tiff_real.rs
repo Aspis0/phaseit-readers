@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Real-file smoke / parity test for the TIFF reader.
-//!
-//! Uses a real RGB confocal TIFF, read from the folder named by
-//! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README). Skips cleanly
-//! (early return) when the variable is unset or the sample is absent, so CI
-//! without the file stays green — unless the run sets
-//! `PHASIT_REAL_DATA_REQUIRED=1`, which turns every such skip into a failure.
+//! Real-file smoke and parity test for the TIFF reader, on a real RGB confocal TIFF from the folder named by
+//! `PHASIT_REAL_DATA_DIR`.
+//! Skips when the variable or the sample is absent; `PHASIT_REAL_DATA_REQUIRED=1` makes those skips failures.
 
 mod real_data;
 
@@ -36,17 +32,12 @@ fn rgb_tiff_geometry_and_planes() {
     assert_eq!(scene.samples, 3, "the samples of a pixel stay together");
     assert_eq!(scene.channels.len(), 1);
 
-    // The plane carries all three components, interleaved per pixel.
     let plane = reader.plane(0, 0, 0, 0).expect("plane");
     assert_eq!(plane.shape, [712, 1023]);
     assert_eq!(plane.samples, 3);
     assert_eq!(plane.data.len(), 712 * 1023 * 3);
 
-    // Cheap sanity from the Python reference: S0 and S2 are byte-identical,
-    // and component 1 differs from component 0. NOTE: this pair is symmetric
-    // under an R/B swap, so it is NOT sufficient to prove the component
-    // order -- the bit-exact check below
-    // (`rgb_planes_bit_exact_vs_tifffile_reference`) is the real gate.
+    // S0 == S2 is symmetric under an R/B swap, so the bit-exact check below is the real component-order gate.
     let (s0, s1, s2) = components(&plane.data);
     assert_eq!(s0, s2, "R (S0) == B (S2)");
     assert_ne!(s0, s1, "R (S0) != G (S1)");
@@ -56,14 +47,12 @@ fn rgb_tiff_geometry_and_planes() {
         Err(Error::OutOfRange { scene: 0, t: 0, c: 1, z: 0 }) => {}
         other => panic!("expected OutOfRange for c=1, got {other:?}"),
     }
-    // Out-of-range scene too.
     assert!(matches!(
         reader.plane(1, 0, 0, 0),
         Err(Error::SceneOutOfRange { scene: 1, .. })
     ));
 }
 
-/// The three components of an interleaved 3-sample plane.
 fn components(data: &PlaneBuf) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let PlaneBuf::U8(values) = data else {
         panic!("expected U8 plane");
@@ -79,13 +68,7 @@ fn components(data: &PlaneBuf) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     (s0, s1, s2)
 }
 
-/// Bit-exact parity: every component of the RGB plane must equal the
-/// tifffile reference `.npy` dumped in `tests/parity/_ref/`, element-for-element.
-/// This is the real component-order gate (a `sample = S-1-c` BGR bug would
-/// fail here even though the cheap R==B/R!=G check above would still pass).
-///
-/// Gated on the `ndarray` feature (needed for `ndarray-npy`); skips cleanly when
-/// the sample or reference dump is absent so CI without the refs stays green.
+/// Element-for-element against the tifffile `.npy`: a BGR component-order bug fails here, not in the R==B check.
 #[cfg(feature = "ndarray")]
 #[test]
 fn rgb_planes_bit_exact_vs_tifffile_reference() {
@@ -114,8 +97,7 @@ fn rgb_planes_bit_exact_vs_tifffile_reference() {
 
     let mut checked = 0usize;
     for obj in extract_objects(&manifest) {
-        // RGB reference entries are indexed by sample offset "S"; the LSM
-        // entries use Z/C and are skipped here.
+        // RGB entries are indexed by sample offset `S`; LSM entries use Z/C and are skipped.
         let s = match json_int_field(&obj, "S") {
             Some(v) => v as usize,
             None => continue,
@@ -139,8 +121,7 @@ fn rgb_planes_bit_exact_vs_tifffile_reference() {
             "reference npy shape disagrees with manifest for S{s}"
         );
 
-        // The reader publishes ONE plane of three interleaved components; the
-        // reference holds one component per file, so the plane is split here.
+        // The reader publishes one interleaved plane; the reference holds one component per file, so it is split here.
         let plane = reader.plane(0, 0, 0, 0).expect("decode plane");
         assert_eq!(plane.shape, [shape[0], shape[1]], "our plane shape (S{s})");
         let PlaneBuf::U8(values) = &plane.data else {
@@ -164,12 +145,9 @@ fn rgb_planes_bit_exact_vs_tifffile_reference() {
     eprintln!("bit-exact parity: matched {checked} RGB planes element-for-element");
 }
 
-// --- minimal JSON helpers for the pretty-printed parity manifest -------------
-// The manifest is machine-generated and stable; a targeted scan avoids pulling
-// in a JSON dependency just for the test.
+// A targeted scan of the machine-generated manifest avoids a JSON dependency for the test.
 
-/// Split a top-level JSON array of objects into per-object substrings by brace
-/// depth (handles the nested `plane_index` object).
+/// Splits a top-level JSON array of objects by brace depth, so nested objects stay whole.
 #[cfg(feature = "ndarray")]
 fn extract_objects(s: &str) -> Vec<String> {
     let mut objs = Vec::new();
@@ -195,7 +173,6 @@ fn extract_objects(s: &str) -> Vec<String> {
     objs
 }
 
-/// Extract a string field `"key": "value"` from one object substring.
 #[cfg(feature = "ndarray")]
 fn json_str_field(obj: &str, key: &str) -> Option<String> {
     let pat = format!("\"{key}\"");
@@ -209,7 +186,6 @@ fn json_str_field(obj: &str, key: &str) -> Option<String> {
     Some(rest[..q2].to_string())
 }
 
-/// Extract an integer field `"key": N` from one object substring.
 #[cfg(feature = "ndarray")]
 fn json_int_field(obj: &str, key: &str) -> Option<i64> {
     let pat = format!("\"{key}\"");
@@ -223,7 +199,6 @@ fn json_int_field(obj: &str, key: &str) -> Option<i64> {
     rest[..end].parse().ok()
 }
 
-/// Extract the two-element `"plane_shape": [Y, X]` array from one object.
 #[cfg(feature = "ndarray")]
 fn json_shape(obj: &str) -> Option<[usize; 2]> {
     let ki = obj.find("\"plane_shape\"")?;

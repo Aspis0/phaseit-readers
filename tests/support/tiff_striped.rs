@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A TIFF of striped pages whose pixels vary from pixel to pixel, written
-//! with the `tiff` crate's own encoder.
-//!
-//! WHY the pixels vary: a region read is checked against a whole-plane read,
-//! and a file whose rows all carry the same value cannot tell a right window
-//! from a wrong one. The encoder writes flat pages, so the pattern is written
-//! here, pixel by pixel.
-//!
-//! The encoder writes the STRIPED layouts only (any sample type it supports,
-//! any compression, any rows-per-strip); the layouts it cannot write are in
-//! [`super::tiff_layout`].
+//! A TIFF of striped pages with pixels that vary, written by the `tiff` crate's encoder (which writes flat pages only).
+//! WHY the pixels vary: a file whose rows carry one value cannot tell a right window from a wrong one; the layouts the
+//! encoder cannot write are in `tiff_layout`.
 
 use std::fs::File;
 use std::path::Path;
@@ -20,25 +12,17 @@ use tiff::tags::Tag;
 
 use super::tiff_page::{Pattern, SampleType};
 
-/// One page of a striped TIFF file, written with the `tiff` crate's encoder.
 pub struct StripedPage {
     pub width: u32,
     pub height: u32,
-    /// Samples per pixel: 1 = grey, 3 = RGB.
     pub samples: u16,
     pub sample_type: SampleType,
-    /// How many rows each strip holds.
     pub rows_per_strip: u32,
-    /// Whether the page states `PlanarConfiguration = 2` (each sample in its
-    /// own plane). With one sample per pixel the layout is the same either
-    /// way; with more, the file says it cannot be addressed.
+    /// `PlanarConfiguration = 2`: with more than one sample the file says it cannot be addressed.
     pub planar: bool,
 }
 
-/// Write a TIFF of striped pages whose pixels vary from pixel to pixel.
-///
-/// The description, when given, goes on the first page, where the reader
-/// looks for OME-XML.
+/// The description, when given, goes on the first page, where the reader looks for OME-XML.
 pub fn write_striped(
     path: &Path,
     description: Option<&str>,
@@ -64,7 +48,6 @@ pub fn write_striped(
     }
 }
 
-/// Write one striped page, whose pixels vary from pixel to pixel.
 fn write_page_with<C: ColorType>(
     encoder: &mut TiffEncoder<File>,
     page: &StripedPage,

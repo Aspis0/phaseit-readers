@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A plain TIFF whose ImageJ description states two frames: the plane at t=1
-//! is the second page. No file of the parity corpus has T > 1, so this is the
-//! only check of the time term of the plain-TIFF page map.
+//! A plain TIFF whose ImageJ description states two frames: the plane at t=1 is the second page.
+//! No file of the parity corpus has T > 1, so this is the only check of the time term of the plain-TIFF page map.
 
 mod support;
 

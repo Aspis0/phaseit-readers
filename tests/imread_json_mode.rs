@@ -56,6 +56,14 @@ const PLANE_HASHES: &[(&str, &str)] = &[
         "2a5f5cae478ad9bf82ca8e245a1a5424e5da993fa98d72aad0023296454f7684",
     ),
     (
+        "float32-nan-channel.tif:0:0:0:0",
+        "2a5f5cae478ad9bf82ca8e245a1a5424e5da993fa98d72aad0023296454f7684",
+    ),
+    (
+        "float32-nan-channel.tif:0:0:1:0",
+        "f276c984844767a3dd0b4c2cde2c41ba70e3833a9fea6d80a318ade3c99ceb22",
+    ),
+    (
         "two-series.ome.tif:0:0:0:0",
         "14927cc0c5f5e59e675d6f8ef42dda466a58b61027827cf22d41068e419d7869",
     ),
@@ -118,16 +126,22 @@ fn samples_of(hex: &str, dtype: &str) -> Vec<f64> {
     match dtype {
         "U8" => raw.iter().map(|b| *b as f64).collect(),
         "U16" => raw
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]) as f64)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_le_bytes(*pair) as f64)
             .collect(),
         "I16" => raw
-            .chunks_exact(2)
-            .map(|pair| i16::from_le_bytes([pair[0], pair[1]]) as f64)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i16::from_le_bytes(*pair) as f64)
             .collect(),
         "F32" => raw
-            .chunks_exact(4)
-            .map(|quad| f32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]]) as f64)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|quad| f32::from_le_bytes(*quad) as f64)
             .collect(),
         other => panic!("unknown dtype {other}"),
     }
@@ -135,7 +149,9 @@ fn samples_of(hex: &str, dtype: &str) -> Vec<f64> {
 
 fn hex_to_bytes(hex: &str) -> Vec<u8> {
     let text = hex.as_bytes();
-    text.chunks_exact(2)
+    text.as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = std::str::from_utf8(pair).expect("hex text");
             u8::from_str_radix(pair, 16).expect("hex digit")

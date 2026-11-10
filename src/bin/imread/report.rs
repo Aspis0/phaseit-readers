@@ -1,13 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! One file -> one JSON line: what the reader saw of the file, and what it
-//! decoded of it.
-//!
-//! The line is the unit of record of a sweep. It states the format the reader
-//! detected, the outcome of the open (opened / refused / error), the metadata
-//! of every scene, the scenes the reader refused with their reasons, and — for
-//! the planes the sweep decodes — the statistics and the hash of the plane's
-//! bytes. Only metadata, statistics and hashes are recorded: no pixel data is
-//! written anywhere, and the plane bytes are hashed, never stored.
+//! One file, one JSON line: the sweep's unit of record. Only metadata, statistics and hashes are recorded,
+//! never pixels.
 
 use std::path::Path;
 use std::time::Instant;
@@ -19,31 +12,19 @@ use super::json;
 use super::plane;
 use super::sha256;
 
-/// The file opened and its scenes are readable.
 const OPENED: &str = "opened";
-/// The reader refused every scene of the file.
 const REFUSED: &str = "refused";
-/// The file could not be read at all.
 const ERROR: &str = "error";
 
-/// The sentences a reader opens a wholly-refused file's error with.
-///
-/// The crate has no dedicated error variant for "every scene of this file was
-/// refused", so the wording is matched here. Should a reader change its
-/// wording, such a file is reported as an error instead of a refusal — never
-/// as an opened file.
+/// No error variant says "every scene refused", so the wording is matched here. A reader that changes it
+/// turns a refusal into an error, never into an opened file.
 const REFUSAL_OPENINGS: [&str; 3] = [
     "no scene of this OME-TIFF can be read",
     "LIF has no decodable images",
     "CZI has no readable scene",
 ];
 
-/// One file, as one JSON line.
-///
-/// `regions` says whether each window the reader serves is compared with the
-/// same window cropped out of the whole plane. The comparison is ON by
-/// default; a timing run turns it OFF, so that two builds do exactly the
-/// same work per file.
+/// `regions` compares each window with the same window cropped out of the whole plane.
 pub fn file_report(path: &Path, regions: bool) -> String {
     let format = match phasit_imread::detect_format(path) {
         Ok(format) => format!("{format:?}"),
@@ -95,7 +76,6 @@ pub fn file_report(path: &Path, regions: bool) -> String {
     )
 }
 
-/// A file the reader could not open: refused, or an error.
 fn failed_report(path: &Path, format: Option<&str>, error: &Error) -> String {
     let message = error.to_string();
     let refusal = refusal_entries(error);
@@ -119,7 +99,6 @@ fn failed_report(path: &Path, format: Option<&str>, error: &Error) -> String {
     )
 }
 
-/// The metadata of one scene.
 fn scene_json(index: usize, file_index: usize, scene: &SceneMeta) -> String {
     let dims = scene.dims;
     let channels = scene
@@ -168,12 +147,7 @@ fn scene_json(index: usize, file_index: usize, scene: &SceneMeta) -> String {
     )
 }
 
-/// The planes the sweep decodes of one scene.
-///
-/// The first and the middle Z of `t = 0`, for every channel of the scene: two
-/// planes per channel, whatever the depth of the scene is. A plane the reader
-/// refuses is a result, not a failure — it is reported with its reason and the
-/// rest of the file is still reported.
+/// The first and middle Z of `t = 0` for every channel. A refused plane is a result, not a failure.
 fn plane_reports(
     scene_index: usize,
     reader: &dyn ImageReader,
@@ -189,7 +163,6 @@ fn plane_reports(
     reports
 }
 
-/// The Z positions the sweep decodes: the first and the middle one.
 fn sweep_z_positions(z_count: usize) -> Vec<usize> {
     if z_count <= 1 {
         vec![0]
@@ -198,7 +171,6 @@ fn sweep_z_positions(z_count: usize) -> Vec<usize> {
     }
 }
 
-/// One decoded plane: its statistics, its hash, and how long it took.
 fn plane_report(
     scene_index: usize,
     reader: &dyn ImageReader,
@@ -252,11 +224,8 @@ fn plane_report(
     }
 }
 
-/// The windows the sweep reads of one plane.
-///
-/// Three windows per plane: a quarter at the origin, a quarter in the middle,
-/// and the last pixel. They are the windows a pyramid asks for, and the
-/// middle one falls on no chunk boundary in general.
+/// Three windows: a quarter at the origin, one in the middle (on no chunk boundary in general), and the last pixel.
+/// These are the windows a pyramid asks for.
 fn sweep_rects(dims: &Dims5) -> Vec<PixelRect> {
     let (w, h) = (dims.x, dims.y);
     if w == 0 || h == 0 {
@@ -271,11 +240,7 @@ fn sweep_rects(dims: &Dims5) -> Vec<PixelRect> {
     ]
 }
 
-/// The windows the sweep reads of one plane, each compared with the same
-/// window cropped out of the plane.
-///
-/// A window the reader refuses is a result, not a failure: it is reported with
-/// its reason. Only hashes are recorded — never pixels.
+/// A refused window is a result, not a failure: it is reported with its reason.
 fn region_reports(
     reader: &dyn ImageReader,
     scene_index: usize,
@@ -290,8 +255,6 @@ fn region_reports(
         .collect()
 }
 
-/// One window: the region the reader gave, and the same window cropped out of
-/// the whole plane, each as a hash.
 fn region_report(
     reader: &dyn ImageReader,
     scene_index: usize,
@@ -335,7 +298,7 @@ fn region_report(
     }
 }
 
-/// The kind of a reader error, as a stable short name.
+/// Stable short name of the error kind; the names are part of the JSON output.
 fn error_kind(error: &Error) -> &'static str {
     match error {
         Error::Io(_) => "io",
@@ -351,12 +314,8 @@ fn error_kind(error: &Error) -> &'static str {
     }
 }
 
-/// The refusals a wholly-refused file's error names, one JSON entry each.
-///
-/// The crate formats every refusal as `<Image> {index} "{name}": {reason}` and
-/// joins them with `"; "`. Only an `Unsupported` error can carry them, and its
-/// text — without the `unsupported: ` prefix the error's `Display` adds — is
-/// what the readers wrote.
+/// Refusals are joined with `"; "` in the `<Image> {index} "{name}": {reason}` format; only `Unsupported` carries them.
+/// The `unsupported: ` prefix added by `Display` is stripped, leaving the reader's own text.
 fn refusal_entries(error: &Error) -> Vec<String> {
     let text = match error {
         Error::Unsupported(text) => text.as_str(),
@@ -385,7 +344,6 @@ fn refusal_entries(error: &Error) -> Vec<String> {
         .collect()
 }
 
-/// The milliseconds since `started`.
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }

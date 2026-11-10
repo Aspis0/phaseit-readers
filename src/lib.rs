@@ -1,26 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! phasit-imread — native Rust reader for proprietary microscopy image formats
-//! (TIFF/OME-TIFF, LSM, LIF, CZI, ND2, OIB/OIF).
-//!
-//! Offline, in-process, no external services. The public contract lives in
-//! [`types`] (canonical axis order **TCZYX**); [`detect`] handles format
-//! sniffing and the [`open`] dispatch; [`guard`] holds the allocation
-//! guardrails every reader calls before touching memory.
-//!
-//! Concrete format backends are filled in per format:
-//! TIFF/OME-TIFF, LSM, LIF, CZI and ND2 have readers; OIB and OIF are detected
-//! but have none yet.
+//! Rust reader for TIFF/OME-TIFF, LSM, LIF, CZI and ND2, offline and in-process. Contract: [`types`], axis **TCZYX**.
+//! [`detect`] sniffs the format, [`open`] dispatches, [`guard`] holds the guardrails; OIB and OIF have no reader yet.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), phasit_imread::Error> {
 //! let path = std::path::Path::new("scan.tif");
-//! let reader = phasit_imread::open(path)?;  // dispatch by magic + extension
-//! let meta = reader.meta();                 // the scenes of the whole file
+//! let reader = phasit_imread::open(path)?;
+//! let meta = reader.meta();
 //! println!("{} scenes", meta.scene_count());
-//! let plane = reader.plane(0, 0, 0, 0)?;    // (scene, t, c, z)
+//! let plane = reader.plane(0, 0, 0, 0)?;
 //! println!("{}x{} plane", plane.shape[0], plane.shape[1]);
-//! println!("{} refused", reader.refused_scenes().len());  // the scenes refused
-//! println!("scene 0 is image {}", reader.scene_file_index(0));  // its file position
+//! println!("{} refused", reader.refused_scenes().len());
+//! println!("scene 0 is image {}", reader.scene_file_index(0));
 //! # Ok(())
 //! # }
 //! ```
@@ -56,17 +47,14 @@ mod tiff_palette;
 mod tiff_plain;
 mod tiff_region;
 mod tiff_tags;
+mod xml_entities;
 
-// The real-file gate the tests share, INCLUDED rather than copied: the
-// library's own unit tests need the same skip-or-fail decision, and the
-// helper lives with the other test helpers. `cfg(test)` keeps it out of the
-// library, so no new public API ships.
+// The real-file gate is shared with the integration tests; `cfg(test)` keeps it out of the public API.
 #[cfg(test)]
 #[path = "../tests/real_data/mod.rs"]
 mod real_data;
 
-/// CZI JPEG-XR (compression id 4) decode via vendored jxrlib. Opt-in: only
-/// compiled with the `jpegxr` feature (needs a C toolchain to build jxrlib).
+/// CZI JPEG-XR (compression id 4) via vendored jxrlib; needs a C toolchain, so it is opt-in.
 #[cfg(feature = "jpegxr")]
 mod jpegxr_ffi;
 
@@ -75,7 +63,7 @@ pub use crate::error::{Error, Result};
 pub use crate::guard::{checked_plane_alloc, MAX_DECODED_PLANE_BYTES, MAX_MMAP_BYTES, MAX_SCENE_DIM};
 pub use crate::types::{
     ChannelMeta, DType, Dims5, Endian, ImageMeta, ImageReader, Plane, PlaneBuf, PxSizeUm,
-    RefusedScene, SceneMeta,
+    RefusedLevel, RefusedScene, SceneMeta, StoredLevel, StoredPyramid,
 };
 
 #[cfg(feature = "ndarray")]

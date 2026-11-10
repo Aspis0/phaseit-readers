@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The channel metadata of an LSM file: the names and the display colours the
-//! file's channel-colours block carries.
-//!
-//! The files are synthetic (see `support::lsm`); the real ones are gated
-//! behind `PHASIT_REAL_DATA_DIR` and live in `lsm_real.rs`.
+//! The channel metadata of an LSM file: the names and display colours of its channel-colours block, on synthetic files.
+//! The real ones are gated behind `PHASIT_REAL_DATA_DIR` and live in `lsm_real.rs`.
 
 mod support;
 
@@ -12,8 +9,6 @@ use phasit_imread::ImageReader;
 use support::lsm::{build, write_lsm, LsmSpec};
 use support::scratch_dir;
 
-/// A three-channel file whose colour block and ScanInfo disagree, as they do
-/// in the real files.
 fn three_channels() -> LsmSpec {
     LsmSpec {
         x: 2,
@@ -43,9 +38,7 @@ fn three_channels() -> LsmSpec {
 fn the_channel_names_come_from_the_channel_colours_block() {
     let dir = scratch_dir("lsm_channel_names");
     let path = dir.join("names.lsm");
-    // The two blocks disagree, as they do in the real files: the
-    // channel-colours block holds the names with the acquisition's suffixes,
-    // the ScanInfo the bare ones.
+    // The blocks disagree, as in real files: the channel-colours names carry the acquisition's suffixes.
     write_lsm(&path, &three_channels());
 
     let reader = LsmReader::open(&path).expect("open the file");

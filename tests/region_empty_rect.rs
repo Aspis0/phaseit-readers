@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! An EMPTY rectangle is an empty plane, on every reader.
-//!
-//! The trait's default `region()` returns `plane()?.crop(rect)`, and cropping
-//! an empty rectangle gives an EMPTY plane of shape `[rect.h, rect.w]`. Every
-//! reader's own path must return the same thing for the same call — and a
-//! reader that counts the rows an empty rectangle covers can underflow on
-//! `rect.h - 1`, so the empty case is settled before any counting starts.
+//! An empty rectangle is an empty plane on every reader: the trait default crops to `[rect.h, rect.w]`, and every
+//! reader's own path must match.
+//! A reader that counts the rows an empty rect covers can underflow on `rect.h - 1`, so the empty case is settled
+//! before counting starts.
 
 mod support;
 
@@ -17,7 +14,8 @@ use phasit_imread::tiff_reader::TiffReader;
 use phasit_imread::types::PixelRect;
 use phasit_imread::{Error, ImageReader, Plane};
 
-use support::czi::{scratch as czi_scratch, write_czi, Tile};
+use support::czi::{scratch as czi_scratch, Tile};
+use support::czi_write::write_czi;
 use support::lif::{write_lif, LifImage};
 use support::lsm::{write_lsm, LsmSpec};
 use support::nd2::{write_nd2, Nd2File};
@@ -27,8 +25,6 @@ use support::tiff_striped::{write_striped, StripedPage};
 use support::{write_grey, GreyPage};
 use tiff::encoder::{Compression, DeflateLevel};
 
-/// The empty rectangles every reader is checked with: no width, no height,
-/// and neither. Each one is inside every fixture's plane.
 fn empty_rects() -> [PixelRect; 3] {
     [
         PixelRect::new(0, 0, 0, 1),
@@ -37,10 +33,7 @@ fn empty_rects() -> [PixelRect; 3] {
     ]
 }
 
-/// Assert that an empty rectangle gives an empty plane, and NOT an error.
-///
-/// The plane's shape is the rectangle's shape, and its samples are the
-/// reader's own.
+/// An empty rectangle gives an empty plane, and NOT an error; its samples are the reader's own.
 fn assert_empty_plane(reader: &dyn ImageReader, what: &str) {
     let scene = reader.meta().scene(0).expect("the scene");
     for rect in empty_rects() {
@@ -120,9 +113,7 @@ fn an_empty_rectangle_of_an_nd2_plane_is_an_empty_plane() {
 
 #[test]
 fn an_empty_rectangle_of_a_compressed_tiff_page_is_an_empty_plane() {
-    // A COMPRESSED page is read by decoding the chunks the window touches, so
-    // the empty rectangle has to be settled before the reader counts the
-    // chunks it would touch.
+    // A compressed page decodes the chunks a window touches: the empty rect must be settled before counting them.
     let dir = scratch_dir("region_empty_tiff_compressed");
     let path = dir.join("empty_compressed.tif");
     write_striped(
@@ -148,8 +139,7 @@ fn an_empty_rectangle_of_a_compressed_tiff_page_is_an_empty_plane() {
 
 #[test]
 fn an_empty_rectangle_still_checks_the_coordinate_first() {
-    // The coordinate is wrong AND the rectangle is empty: the coordinate is
-    // checked first, so the call is out of range.
+    // Wrong coordinate and an empty rect: the coordinate is checked first.
     let dir = scratch_dir("region_empty_out_of_range");
     let path = dir.join("empty.tif");
     write_grey(
@@ -171,12 +161,8 @@ fn an_empty_rectangle_still_checks_the_coordinate_first() {
     );
 }
 
-/// The trait's default `region()` is the reference: an empty rectangle there
-/// is an empty plane too.
 #[test]
 fn the_default_region_read_agrees_with_the_readers() {
-    // The default path crops the whole plane, so the two paths are compared
-    // on the same file.
     let dir = scratch_dir("region_empty_default");
     let path = dir.join("default.tif");
     write_grey(

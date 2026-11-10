@@ -435,6 +435,49 @@ def signed_and_float():
     return int_path, int_entry, float_path, float_entry
 
 
+def float32_nan_channel():
+    """Two float channels, one of them holding pixels that are not numbers."""
+    width, height = 4, 3
+    finite = [(x + y) / 4.0 for y in range(height) for x in range(width)]
+    # The second channel holds two pixels that are not numbers: its own count is
+    # smaller than the count of the mask, and of the first channel.
+    with_nan = list(finite)
+    with_nan[0] = float("nan")
+    with_nan[5] = float("nan")
+    description = (
+        "ImageJ=1.54p\nimages=2\nchannels=2\nslices=1\nhyperstack=true\n"
+        "mode=composite\nunit=\\u00B5m\nspacing=1.5\nloop=false\n"
+    )
+    pages = []
+    for values in (finite, with_nan):
+        pages.append({
+            "width": width,
+            "height": height,
+            "data": struct.pack("<12f", *values),
+            "tags": {
+                258: (SHORT, [32]), 259: (SHORT, [1]), 262: (SHORT, [1]), 339: (SHORT, [3]),
+                270: (ASCII, description),
+                # 6666.7 pixels per centimetre = 1.5 um per pixel.
+                282: (RATIONAL, [(66667, 10)]),
+                283: (RATIONAL, [(66667, 10)]),
+                296: (SHORT, [3]),
+            },
+        })
+    return write_tiff(os.path.join(HERE, "float32-nan-channel.tif"), pages), {
+        "file": "float32-nan-channel.tif",
+        "what": "two float channels: the second one holds two pixels that are not numbers",
+        "scenes": 1,
+        "dims": {"t": 1, "c": 2, "z": 1, "y": 3, "x": 4},
+        "dtype": "F32",
+        "samples": 1,
+        "pxSizeUm": {"x": 1.5, "y": 1.5, "z": 1.5},
+        "planes": [
+            {"t": 0, "c": 0, "z": 0, "hex": pages[0]["data"].hex()},
+            {"t": 0, "c": 1, "z": 0, "hex": pages[1]["data"].hex()},
+        ],
+    }
+
+
 def main():
     entries = []
     for maker in (palette_8bit, rgb_per_sample_format, rgba_8bit, imagej_hyperstack):
@@ -443,6 +486,8 @@ def main():
     _int_path, int_entry, _float_path, float_entry = signed_and_float()
     entries.append(int_entry)
     entries.append(float_entry)
+    _nan_path, nan_entry = float32_nan_channel()
+    entries.append(nan_entry)
     _ome_path, ome_entry = two_series_ome()
     entries.append(ome_entry)
     _refused_path, refused_entry = refused_ome()

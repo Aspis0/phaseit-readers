@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Bounds-checked reads of the scalars a Zeiss LSM file is made of.
-//!
-//! The LSM container is a TIFF whose private structs are read field by field:
-//! the CZ-LSM-Info struct, the channel-colours block, the name table. All of
-//! them need the same four scalars at a given offset, and every one of those
-//! reads must fail cleanly when the file ends first. The checks live here so
-//! that the format's readers share one implementation of them.
+//! Bounds-checked reads of the scalars a Zeiss LSM file is made of: every read fails cleanly when the file ends first.
+//! Shared by the LSM structs and the channel-colours block, so the checks have one implementation.
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 
 use crate::error::{Error, Result};
 use crate::types::Endian;
 
-/// Read a `u8` at `off`.
 pub fn read_u8(buf: &[u8], off: usize) -> Result<u8> {
     Ok(slice(buf, off, 1)?[0])
 }
 
-/// Read a `u16` at `off`.
 pub fn read_u16(buf: &[u8], off: usize, e: Endian) -> Result<u16> {    let s = slice(buf, off, 2)?;
     Ok(match e {
         Endian::Little => LittleEndian::read_u16(s),
@@ -25,7 +18,6 @@ pub fn read_u16(buf: &[u8], off: usize, e: Endian) -> Result<u16> {    let s = s
     })
 }
 
-/// Read a `u32` at `off`.
 pub fn read_u32(buf: &[u8], off: usize, e: Endian) -> Result<u32> {
     let s = slice(buf, off, 4)?;
     Ok(match e {
@@ -34,7 +26,6 @@ pub fn read_u32(buf: &[u8], off: usize, e: Endian) -> Result<u32> {
     })
 }
 
-/// Read an `i32` at `off`.
 pub fn read_i32(buf: &[u8], off: usize, e: Endian) -> Result<i32> {
     let s = slice(buf, off, 4)?;
     Ok(match e {
@@ -43,7 +34,6 @@ pub fn read_i32(buf: &[u8], off: usize, e: Endian) -> Result<i32> {
     })
 }
 
-/// Read an `f64` at `off`.
 pub fn read_f64(buf: &[u8], off: usize, e: Endian) -> Result<f64> {
     let s = slice(buf, off, 8)?;
     Ok(match e {
@@ -52,7 +42,6 @@ pub fn read_f64(buf: &[u8], off: usize, e: Endian) -> Result<f64> {
     })
 }
 
-/// The `need` bytes at `off`, or the error that says why there are none.
 fn slice(buf: &[u8], off: usize, need: usize) -> Result<&[u8]> {
     let end = off
         .checked_add(need)

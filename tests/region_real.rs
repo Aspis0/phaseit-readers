@@ -1,23 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The real LIF, ND2, TIFF and LSM files: a region is exactly the cropped
-//! plane.
-//!
-//! The files come from the folder named by `PHASIT_REAL_DATA_DIR` (the layout
-//! is in the crate README). Every `.lif`, `.nd2`, `.tif` and `.lsm` under that
-//! folder is opened, and for every scene and a few planes several rectangles
-//! are compared IN-PROCESS: the region's bytes against the cropped plane's
-//! bytes. The pixels are never printed — only how many files, scenes and
-//! rectangles were compared, how many readers are region-capable, and how
-//! many files of each layout (strips or tiles, and the compression) were
-//! compared.
-//!
-//! EVERY published scene is compared: a scene that was skipped would be a
-//! hole in the coverage, and the counter of "planes too large to crop" was a
-//! tautology (no real file has one), not evidence. A plane that cannot be
-//! materialised now fails the run loudly instead of being skipped.
-//!
-//! The run skips cleanly when the folder is not set, and fails loudly when
-//! `PHASIT_REAL_DATA_REQUIRED=1` says the run needs the data.
+//! The real LIF, ND2, TIFF and LSM files: every published scene's region is exactly the cropped plane.
+//! Every `.lif`, `.nd2`, `.tif` and `.lsm` under `PHASIT_REAL_DATA_DIR` is opened, and several rectangles per plane are
+//! compared in-process; the pixels are never printed.
+//! EVERY published scene is compared: a skipped plane would be a hole in the coverage, so a plane that cannot be
+//! materialised fails the run.
+//! The run skips cleanly when the folder is unset, and fails when `PHASIT_REAL_DATA_REQUIRED=1` says it needs the data.
 
 mod real_data;
 
@@ -33,7 +20,6 @@ use phasit_imread::{Dims5, ImageReader};
 
 use real_data::{absent, parse_real_data_dir, parse_required, Decision};
 
-/// What the run compared, and what it found.
 #[derive(Default)]
 struct Counters {
     files: usize,
@@ -42,11 +28,9 @@ struct Counters {
     rectangles: usize,
     region_capable: usize,
     default: usize,
-    /// How many files of each layout were compared.
     layouts: BTreeMap<String, usize>,
 }
 
-/// The real-data folder, or `None` when the run may skip.
 fn real_data_dir() -> Option<PathBuf> {
     let required = parse_required(std::env::var_os("PHASIT_REAL_DATA_REQUIRED").as_deref());
     let dir = parse_real_data_dir(std::env::var_os("PHASIT_REAL_DATA_DIR").as_deref());
@@ -63,7 +47,6 @@ fn real_data_dir() -> Option<PathBuf> {
     }
 }
 
-/// Every `.lif`, `.nd2`, `.tif` and `.lsm` file under `dir`, in a stable order.
 fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -82,11 +65,7 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// How a file stores its pixels: the chunk layout and the compression.
-///
-/// WHY: the reader does not publish the layout of a file, so the test reads
-/// the tags that say it — a tiled page states `TileWidth`, and the
-/// `Compression` tag names the algorithm. An LSM is uncompressed and planar.
+/// WHY: the reader does not publish a file's layout, so the test reads the tags that state it.
 fn classify(path: &Path) -> String {
     if path.extension().and_then(|e| e.to_str()) == Some("lsm") {
         return "planar strips, uncompressed".to_string();
@@ -109,9 +88,6 @@ fn classify(path: &Path) -> String {
     format!("{layout}, compression {compression}")
 }
 
-/// The rectangles a scene is probed with: the whole plane, one pixel at each
-/// corner, a window against the last row and column, and a window in the
-/// middle that is aligned to nothing.
 fn probe_rects(dims: Dims5) -> Vec<PixelRect> {
     let x = dims.x.max(1);
     let y = dims.y.max(1);
@@ -133,8 +109,7 @@ fn probe_rects(dims: Dims5) -> Vec<PixelRect> {
     ]
 }
 
-/// Compare every rectangle of a few planes of every scene against the cropped
-/// plane. The bytes are compared in-process and never printed.
+/// Compares every rectangle of a few planes of every scene in-process; the bytes are never printed.
 fn compare_reader(reader: &dyn ImageReader, counters: &mut Counters) {
     counters.files += 1;
     if reader.supports_region() {
@@ -148,8 +123,6 @@ fn compare_reader(reader: &dyn ImageReader, counters: &mut Counters) {
         counters.scenes += 1;
         let dims = meta.scene(scene).expect("the scene exists").dims;
 
-        // A few planes: the first, and the last channel / Z plane when the
-        // scene has them.
         let mut coords = vec![(0usize, 0usize, 0usize)];
         if dims.c > 1 {
             coords.push((0, dims.c - 1, 0));

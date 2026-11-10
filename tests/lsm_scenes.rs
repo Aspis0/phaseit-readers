@@ -169,4 +169,3 @@ fn a_plain_file_is_still_one_scene() {
     assert_eq!(meta.scenes[0].name, "plain", "no suffix on a single scene");
     assert_eq!(meta.scenes[0].dims.z, 2);
 }
-

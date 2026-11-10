@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! What one OME scene is, read from its `<Pixels>` and checked against its
-//! first page: its size, pixel type, colour model, calibration, channels, and
-//! the order its planes are stored in.
-//!
-//! The OME-XML shapes read here are ported from the reference reader `tifffile`
-//! (Christoph Gohlke, BSD-3-Clause). Keep this attribution.
-//!
-//! A `<Pixels>` that states something this reader does not model, or that
-//! disagrees with the page it describes, is refused with the reason named.
-//! Nothing here reads pixels.
+//! One OME scene, read from its `<Pixels>` and checked against its first page. A `<Pixels>` that states something
+//! this reader does not model, or that disagrees with its page, is refused by name. Nothing here reads pixels.
+//! The OME-XML shapes are ported from `tifffile` (Christoph Gohlke, BSD-3-Clause). Keep this attribution.
 
 use crate::calibration::Calibration;
 use crate::error::{Error, Result};
@@ -19,14 +12,11 @@ use crate::tiff_page::PageFacts;
 use crate::tiff_tags;
 use crate::types::{ChannelMeta, DType, Dims5, SceneMeta};
 
-/// The scene a `<Pixels>` describes, and the order its planes are stored in.
 pub(crate) struct SceneGeometry {
     pub meta: SceneMeta,
     pub order: [Axis; 3],
 }
 
-/// Read the geometry of one scene from its `<Pixels>`, given the facts of the
-/// first page its planes come from.
 pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneGeometry> {
     let (sx, sy) = declared_plane_size(pixels)?;
     let (sz, sc, st) = declared_counts(pixels)?;
@@ -34,8 +24,7 @@ pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneG
     let dtype = checked_dtype(pixels, page)?;
     check_page_size(page, (sx, sy))?;
 
-    // `XYCZT` is the OME spec default DimensionOrder, so falling back to
-    // it when the attribute is absent is spec-correct.
+    // XYCZT is the OME default DimensionOrder: an absent attribute falls back to it.
     let order = parse_dim_order(pixels.dim_order.as_deref().unwrap_or("XYCZT"))?;
 
     let samples = samples_of_page(page)?;
@@ -61,9 +50,7 @@ pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneG
     Ok(SceneGeometry { meta, order })
 }
 
-/// One OME `PhysicalSize*` attribute in micrometres, or `None` when it is
-/// absent, non-positive, or named in a unit the calibration table cannot
-/// read. An absent unit attribute is the spec default, the micrometre.
+/// An absent unit is the spec default, the micrometre; an unknown unit yields `None`.
 fn physical_size_um(value: Option<f32>, unit: Option<&str>) -> Option<f32> {
     let scale = match unit {
         Some(name) => micrometers_per_unit(name)?,
@@ -73,7 +60,6 @@ fn physical_size_um(value: Option<f32>, unit: Option<&str>) -> Option<f32> {
     (um.is_finite() && um > 0.0).then_some(um)
 }
 
-/// Map an OME `Pixels/@Type` string to our [`DType`].
 fn ome_dtype(t: &str) -> Result<DType> {
     match t.trim() {
         "uint8" => Ok(DType::U8),
@@ -86,11 +72,7 @@ fn ome_dtype(t: &str) -> Result<DType> {
     }
 }
 
-/// The samples per pixel a scene carries, as its first page states them.
-///
-/// A grey page carries one sample. An RGB page carries its components together
-/// in the page, so the scene is one channel of that many components, the model
-/// Bio-Formats publishes for such a file. Any other photometric is refused.
+/// An RGB page is one channel of its components, the model Bio-Formats publishes; other photometrics are refused.
 fn samples_of_page(page: &PageFacts) -> Result<usize> {
     match page.photometric {
         tiff_tags::PHOTOMETRIC_BLACK_IS_ZERO | tiff_tags::PHOTOMETRIC_WHITE_IS_ZERO
@@ -110,7 +92,6 @@ fn samples_of_page(page: &PageFacts) -> Result<usize> {
     }
 }
 
-/// The `SizeX` and `SizeY` a `<Pixels>` states. Both are required.
 fn declared_plane_size(pixels: &Pixels) -> Result<(usize, usize)> {
     match (pixels.size_x, pixels.size_y) {
         (Some(x), Some(y)) => Ok((x, y)),
@@ -120,8 +101,7 @@ fn declared_plane_size(pixels: &Pixels) -> Result<(usize, usize)> {
     }
 }
 
-/// The `SizeZ`, `SizeC` and `SizeT` a `<Pixels>` states. A count that does not
-/// parse refuses the scene by name; an absent one is 1.
+/// An absent count is 1; one that does not parse refuses the scene by name.
 fn declared_counts(pixels: &Pixels) -> Result<(usize, usize, usize)> {
     let sz = declared_count("SizeZ", pixels.size_z.as_deref())?;
     let sc = declared_count("SizeC", pixels.size_c.as_deref())?;
@@ -129,7 +109,6 @@ fn declared_counts(pixels: &Pixels) -> Result<(usize, usize, usize)> {
     Ok((sz, sc, st))
 }
 
-/// One declared count: 1 when absent, and at least 1 when present.
 fn declared_count(name: &str, raw: Option<&str>) -> Result<usize> {
     match raw {
         None => Ok(1),
@@ -145,9 +124,8 @@ fn declared_count(name: &str, raw: Option<&str>) -> Result<usize> {
     }
 }
 
-/// Interleaved (chunky-C) OME stores all channels in one IFD; the plan
-/// assumes one channel per IFD (Interleaved="false"), so fail closed rather
-/// than emit confusing seek/length decode errors.
+/// The plan assumes one channel per IFD; interleaved OME would fail later with confusing decode errors, so it is
+/// refused here.
 fn refuse_interleaved(pixels: &Pixels) -> Result<()> {
     if pixels.interleaved {
         return Err(Error::Unsupported(
@@ -157,7 +135,6 @@ fn refuse_interleaved(pixels: &Pixels) -> Result<()> {
     Ok(())
 }
 
-/// The pixel type a `<Pixels>` states, which must be the type of the first page.
 fn checked_dtype(pixels: &Pixels, page: &PageFacts) -> Result<DType> {
     let dtype = match pixels.pixel_type.as_deref() {
         Some(t) => ome_dtype(t)?,
@@ -176,7 +153,6 @@ fn checked_dtype(pixels: &Pixels, page: &PageFacts) -> Result<DType> {
     Ok(dtype)
 }
 
-/// The first page must be the plane size the `<Pixels>` states.
 fn check_page_size(page: &PageFacts, (sx, sy): (usize, usize)) -> Result<()> {
     if (page.width, page.height) != (sx, sy) {
         return Err(Error::Unsupported(format!(
@@ -187,12 +163,9 @@ fn check_page_size(page: &PageFacts, (sx, sy): (usize, usize)) -> Result<()> {
     Ok(())
 }
 
-/// The channels of a scene and its SizeC, as the page's samples allow them.
-///
-/// A grey page is one plane per channel, so the scene has the channels the XML
-/// states, padded to SizeC. An RGB page holds its channels in one page, so the
-/// scene is one channel and SizeC is 1 or the samples per pixel. That channel
-/// keeps the name of the XML's `<Channel>` when the XML states exactly one.
+/// A grey page is one plane per channel, so the scene has the XML's channels padded to SizeC; an RGB page is one
+/// channel.
+/// That channel keeps the XML's name only when the XML states exactly one `<Channel>`.
 fn scene_channels(
     pixels: &Pixels,
     samples: usize,
@@ -215,14 +188,8 @@ fn scene_channels(
     )))
 }
 
-/// The pixel size of a scene, from its `PhysicalSize*` attributes.
-///
-/// A PhysicalSize converts from its declared unit (the spec default is the
-/// micrometre when the Unit attribute is absent). A unit the table cannot read
-/// names no scale, so the size is not published rather than silently read as
-/// micrometres. A Z step the file does not record stays "not recorded"
-/// (`None`), the convention every reader in this crate and the plain-TIFF
-/// path use; a placeholder in its place is not a step either.
+/// A unit the table cannot read names no scale, so no size is published rather than one read as micrometres.
+/// An unrecorded Z step stays `None`, the convention of every reader here; a placeholder is not a step either.
 fn scene_calibration(pixels: &Pixels) -> Calibration {
     match (
         physical_size_um(pixels.px_x, pixels.px_x_unit.as_deref()),

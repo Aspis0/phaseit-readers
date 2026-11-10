@@ -1,20 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Real-file bit-exact parity test for the LIF reader.
-//!
-//! Uses real Leica confocal `.lif` files, read from the folder named by
-//! `PHASIT_REAL_DATA_DIR` (the layout is in the crate README), and the
-//! `liffile` `_ref` dumps (`tests/parity/_ref/manifest_lif.json` + `*.npy`).
-//! Skips cleanly (early return) when the variable is unset, or the samples or
-//! the manifest are absent, so CI without the files stays green — unless the
-//! run sets `PHASIT_REAL_DATA_REQUIRED=1`, which turns every such skip into a
-//! failure. When they ARE present the `checked >= 48` assertion guarantees a
-//! silent skip cannot pass. The harness dumps planes from EVERY image in both
-//! files (not just image[0]), so this covers both the C=3 (`Series001`) and
-//! C=2 (`Series003/004/005`) channel layouts.
-//!
-//! The `Series001_pmd_0` manifest entry is deliberately NOT decoded: its pixels
-//! live in the `.lifext` companion, so the reader (which reads the `.lif` only)
-//! does not expose it as a scene. Every other reference plane must be bit-exact.
+//! Real-file bit-exact parity test for the LIF reader, against the `liffile` `_ref` dumps: every image of both files,
+//! C=3 and C=2.
+//! Skips when the samples or the manifest are absent; `PHASIT_REAL_DATA_REQUIRED=1` makes that a failure, and
+//! `checked >= 48` stops a silent skip from passing.
+//! The `Series001_pmd_0` entry is not decoded: its pixels live in the `.lifext` companion, which the reader does not
+//! expose as a scene.
 
 mod real_data;
 
@@ -23,11 +13,9 @@ use phasit_imread::{DType, Dims5, Error, ImageReader};
 
 use real_data::{real_file, reference_dump};
 
-// Only referenced by the bit-exact parity test (ndarray-gated).
 #[cfg(feature = "ndarray")]
 const SAMPLE_CTRL: &str = "lif/control.lif";
 const SAMPLE_MULTI: &str = "lif/four-scene.lif";
-/// The companion of `SAMPLE_MULTI`: the same dataset's auxiliary data.
 const SAMPLE_MULTI_COMPANION: &str = "lif/four-scene.lifext";
 
 #[test]
@@ -38,10 +26,8 @@ fn lif_geometry_and_out_of_range() {
 
     let reader = LifReader::open(&path).expect("open LIF");
     let meta = reader.meta();
-    // Series001 (3ch) + Series003/004/005 (2ch); pmd_0 lives in the .lifext.
     assert_eq!(meta.scene_count(), 4, "the sample has 4 in-.lif images");
 
-    // Match Series001 by name (scene order follows document order).
     let (idx, s001) = meta
         .scenes
         .iter()
@@ -56,13 +42,11 @@ fn lif_geometry_and_out_of_range() {
     assert_eq!(s001.dtype, DType::U8);
     assert_eq!(s001.channels.len(), 3);
 
-    // A valid plane has the right shape/dtype.
     let p = reader.plane(idx, 0, 0, 0).expect("plane t0 c0 z0");
     assert_eq!(p.shape, [1024, 1024]);
     assert_eq!(p.data.len(), 1024 * 1024);
     assert_eq!(p.dtype(), DType::U8);
 
-    // Out-of-range coordinates must be clean errors, never panics.
     match reader.plane(idx, 0, 0, 59) {
         Err(Error::OutOfRange { z: 59, .. }) => {}
         other => panic!("expected OutOfRange for z=59, got {other:?}"),
@@ -81,18 +65,7 @@ fn lif_geometry_and_out_of_range() {
     ));
 }
 
-/// The `.lifext` companion next to a `.lif` holds the CHILDREN of the `.lif`'s
-/// own images — their histograms and their reduced pyramid levels. Those are
-/// auxiliary data OF the images the `.lif` publishes, not scenes of their own:
-/// the reader publishes the `.lif`'s own images and refuses nothing for the
-/// companion, so the desktop's scene chooser is not flooded with rows that are
-/// not scenes. Bio-Formats does the same — it opens the `.lif` and publishes
-/// the `.lif`'s images only.
-///
-/// The test says what the reader does WHILE the companion sits next to the
-/// `.lif`: four scenes, and no refusal for the companion's children. Both
-/// files are looked up through the real-data helpers, so a run that requires
-/// the real data fails loudly when either is missing.
+/// The companion's children are auxiliary data of the `.lif`'s images, not scenes: nothing is refused for them.
 #[test]
 fn the_companion_holds_auxiliary_data_and_no_scene() {
     let Some(path) = real_file(SAMPLE_MULTI) else {
@@ -115,9 +88,7 @@ fn the_companion_holds_auxiliary_data_and_no_scene() {
     );
 }
 
-/// Bit-exact parity: every non-ext LIF `_ref` plane must equal our decoded
-/// plane, element-for-element. This is the real gate on the DimID→TCZYX mapping,
-/// the channel ordering, and the per-plane byte-offset arithmetic.
+/// Element-for-element: the real gate on the DimID-to-TCZYX mapping, channel order and plane byte offsets.
 #[cfg(feature = "ndarray")]
 #[test]
 fn lif_planes_bit_exact_vs_liffile_reference() {
@@ -139,7 +110,6 @@ fn lif_planes_bit_exact_vs_liffile_reference() {
 
     let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest_lif.json");
 
-    // Open each sample once and reuse across its planes.
     let reader_ctrl = LifReader::open(&ctrl).expect("open the control LIF");
     let reader_multi = LifReader::open(&multi).expect("open the four-scene LIF");
 
@@ -151,20 +121,17 @@ fn lif_planes_bit_exact_vs_liffile_reference() {
             continue;
         }
         let sample = json_str_field(&obj, "sample").expect("sample field");
-        // The manifest names the sample by its file name without the extension.
         let reader = match sample.as_str() {
             "control" => &reader_ctrl,
             "four-scene" => &reader_multi,
             other => panic!("unexpected sample {other:?} in manifest"),
         };
 
-        // Reference plane_index carries Z and C; T is absent (single time point).
         let z = json_int_field(&obj, "Z").expect("Z index") as usize;
         let c = json_int_field(&obj, "C").expect("C index") as usize;
         let shape = json_shape(&obj).expect("plane_shape field");
         let npy_rel = json_str_field(&obj, "npy_path").expect("npy_path field");
 
-        // Find the scene whose name matches; the reader must expose it.
         let scene_idx = reader
             .meta()
             .scenes
@@ -173,11 +140,7 @@ fn lif_planes_bit_exact_vs_liffile_reference() {
             .unwrap_or_else(|| panic!("scene {image_name:?} not found in reader"));
 
         let npy_path = ref_dir.join(&npy_rel);
-        // A manifest entry whose .npy is missing means a PARTIAL reference set: a
-        // broken dev env, not a legitimate skip. Hard-fail so `checked >= 11`
-        // cannot be dodged by a half-present `_ref` dir. The message names the
-        // dump by its path under `tests/parity/_ref`, never by the absolute
-        // path of the build machine.
+        // A missing .npy under a present manifest is a broken dev env: hard-fail, so `checked >= 11` cannot be dodged.
         assert!(
             npy_path.exists(),
             "partial LIF _ref: {npy_rel} is missing (broken reference set)"
@@ -217,8 +180,7 @@ fn lif_planes_bit_exact_vs_liffile_reference() {
     eprintln!("bit-exact parity: matched {checked} LIF planes element-for-element");
 }
 
-// --- minimal JSON helpers for the pretty-printed parity manifest -------------
-// Mirrors the helpers in `lsm_real.rs`; a targeted scan avoids a JSON dep.
+// A targeted scan of the machine-generated manifest avoids a JSON dependency.
 
 #[cfg(feature = "ndarray")]
 fn extract_objects(s: &str) -> Vec<String> {
