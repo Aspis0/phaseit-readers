@@ -19,6 +19,7 @@
 pub mod calibration;
 pub mod czi_reader;
 pub mod detect;
+pub mod dv_reader;
 pub mod error;
 pub mod guard;
 pub(crate) mod io;

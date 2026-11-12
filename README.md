@@ -14,6 +14,7 @@ no network. GPL-free (see `THIRD-PARTY-NOTICES.md`).
 | CZI (Zeiss) | ⚠️ uncompressed and Zstd; JPEG-XR needs `--features jpegxr`; a scene that lost a full-resolution tile is refused with its reason |
 | ND2 (Nikon) | ⚠️ uncompressed frames only (lossless/lossy and legacy JPEG2000 refused) |
 | MRC2014 | ⚠️ one scene; MODE 1, 2 and 6 only; ISPG 0, 1–230 or 401–630 |
+| DeltaVision | ⚠️ one scene; MODE 0, 1, 2 and 6 only; ImgSequence 0, 1 or 2; W ≤ 5 |
 | OIB · OIF (Olympus) | detected, `NotImplemented` |
 
 ⚠️ means the format opens only part of what it can hold; the reader refuses the
@@ -88,6 +89,14 @@ rest rather than guess:
   rather than converted, and so are an axis order other than the standard
   1/2/3, a non-positive extent, a negative extended-header length and a data
   size that runs past the end of the file.
+- **DeltaVision** — one scene: a stack of sections in ZTW, WZT or ZWT order
+  (`ImgSequence 0`, `1` or `2`), split into time points, channels and sections,
+  refused when `NZ` is not divisible by `W * T`, `W` is above 5, a dimension
+  is non-positive, `next` is negative or the data runs past the end of the
+  file. MODE 0, 1, 2 and 6 are read as U8, I16, F32 and U16; the complex modes
+  (3, 4), 16-bit integer of unclear meaning (5) and 32-bit integer (7) are
+  refused rather than converted. The emission wavelengths are not published
+  because the metadata has no field for them.
 
 ## API
 
