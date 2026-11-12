@@ -23,6 +23,8 @@ pub enum Format {
     Mrc,
     /// DeltaVision (widefield/deconvolution); the nDVID magic sits at offset 96, so only the extension detects it.
     Dv,
+    /// ICS/IDS (Image Cytometry Standard); `ics_version` sits at byte 2, so content detects it.
+    Ics,
     Oib,
     /// Olympus OIF (text master file referencing external data).
     Oif,
@@ -32,6 +34,8 @@ pub const HEADER_PROBE_LEN: usize = 16;
 
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 const ND2_MAGIC: [u8; 4] = [0xDA, 0xCE, 0xBE, 0x0A];
+/// The ICS header opens with its two separators, then `ics_version`: bytes 2..13 of the probe.
+const ICS_MAGIC: [u8; 11] = *b"ics_version";
 
 fn is_tiff_magic(h: &[u8]) -> bool {
     h.starts_with(b"II\x2A\x00")
@@ -57,8 +61,7 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
     let name_l = name.map(|n| n.to_ascii_lowercase());
     let name_ref = name_l.as_deref();
     let ext = name_ref.map(ext_of).unwrap_or("");
-    let is_ome = name_ref
-        .is_some_and(|n| n.ends_with(".ome.tif") || n.ends_with(".ome.tiff"));
+    let is_ome = name_ref.is_some_and(|n| n.ends_with(".ome.tif") || n.ends_with(".ome.tiff"));
 
     if header.starts_with(b"ZISRAW") {
         return Ok(Format::Czi);
@@ -72,6 +75,9 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
     }
     if is_lif_magic(header) {
         return Ok(Format::Lif);
+    }
+    if header.get(2..13) == Some(&ICS_MAGIC) {
+        return Ok(Format::Ics);
     }
     if is_tiff_magic(header) {
         if ext == "lsm" {
@@ -91,6 +97,7 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
         "czi" => Ok(Format::Czi),
         "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" => Ok(Format::Mrc),
         "dv" | "r3d" => Ok(Format::Dv),
+        "ics" | "ids" => Ok(Format::Ics),
         "tif" | "tiff" if is_ome => Ok(Format::OmeTiff),
         "tif" | "tiff" => Ok(Format::Tiff),
         other => Err(Error::Unsupported(format!(
@@ -119,6 +126,7 @@ pub fn open(path: &Path) -> Result<Box<dyn ImageReader>> {
         Format::Nd2 => Ok(Box::new(crate::nd2_reader::Nd2Reader::open(path)?)),
         Format::Mrc => Ok(Box::new(crate::mrc_reader::MrcReader::open(path)?)),
         Format::Dv => Ok(Box::new(crate::dv_reader::DvReader::open(path)?)),
+        Format::Ics => Ok(Box::new(crate::ics_reader::IcsReader::open(path)?)),
         Format::Oib => Err(Error::NotImplemented(fmt)),
         Format::Oif => Err(Error::NotImplemented(fmt)),
     }
@@ -142,8 +150,14 @@ mod tests {
 
     #[test]
     fn bigtiff_little_and_big_endian() {
-        assert_eq!(detect_from(b"II\x2B\x00", Some("big.tif")).unwrap(), Format::Tiff);
-        assert_eq!(detect_from(b"MM\x00\x2B", Some("big.tif")).unwrap(), Format::Tiff);
+        assert_eq!(
+            detect_from(b"II\x2B\x00", Some("big.tif")).unwrap(),
+            Format::Tiff
+        );
+        assert_eq!(
+            detect_from(b"MM\x00\x2B", Some("big.tif")).unwrap(),
+            Format::Tiff
+        );
     }
 
     #[test]
@@ -161,7 +175,10 @@ mod tests {
     #[test]
     fn lsm_is_tiff_magic_plus_extension() {
         // LSM files carry TIFF magic; the .lsm extension routes them to Lsm.
-        assert_eq!(detect_from(b"II\x2A\x00", Some("scan.lsm")).unwrap(), Format::Lsm);
+        assert_eq!(
+            detect_from(b"II\x2A\x00", Some("scan.lsm")).unwrap(),
+            Format::Lsm
+        );
         assert_eq!(detect_from(b"", Some("scan.lsm")).unwrap(), Format::Lsm);
     }
 
@@ -182,7 +199,10 @@ mod tests {
 
     #[test]
     fn czi_by_magic() {
-        assert_eq!(detect_from(b"ZISRAWFILE", Some("a.czi")).unwrap(), Format::Czi);
+        assert_eq!(
+            detect_from(b"ZISRAWFILE", Some("a.czi")).unwrap(),
+            Format::Czi
+        );
         assert_eq!(detect_from(b"ZISRAW\x00\x00", None).unwrap(), Format::Czi);
     }
 
@@ -202,6 +222,23 @@ mod tests {
     }
 
     #[test]
+    fn ics_by_content_and_by_extension() {
+        // The two separators come first, so `ics_version` sits at bytes 2..13 of the probe.
+        let header = b"\t\nics_version\t2.0\n";
+        assert_eq!(detect_from(header, Some("a.dat")).unwrap(), Format::Ics);
+        assert_eq!(detect_from(header, None).unwrap(), Format::Ics);
+        assert_eq!(detect_from(b"", Some("a.ics")).unwrap(), Format::Ics);
+        assert_eq!(detect_from(b"", Some("a.ICS")).unwrap(), Format::Ics);
+        assert_eq!(detect_from(b"", Some("a.ids")).unwrap(), Format::Ics);
+        assert_eq!(detect_from(b"", Some("a.IDS")).unwrap(), Format::Ics);
+        // A text file whose byte 2 is not `ics_version` is not detected by content.
+        assert!(matches!(
+            detect_from(b"\t\nics_versio\t2.0\n", Some("a.dat")),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    #[test]
     fn ext_of_handles_dotless_names() {
         assert_eq!(ext_of("lif"), "");
         assert_eq!(ext_of("czi"), "");
@@ -213,7 +250,10 @@ mod tests {
 
     #[test]
     fn oif_by_extension() {
-        assert_eq!(detect_from(b"[Version Info]", Some("a.oif")).unwrap(), Format::Oif);
+        assert_eq!(
+            detect_from(b"[Version Info]", Some("a.oif")).unwrap(),
+            Format::Oif
+        );
     }
 
     #[test]
