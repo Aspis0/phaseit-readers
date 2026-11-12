@@ -8,6 +8,7 @@ pub mod czi;
 pub mod czi_write;
 pub mod lif;
 pub mod lsm;
+pub mod mrc;
 pub mod nd2;
 pub mod scratch;
 pub mod tiff_layout;

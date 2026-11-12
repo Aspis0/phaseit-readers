@@ -13,6 +13,7 @@ no network. GPL-free (see `THIRD-PARTY-NOTICES.md`).
 | LIF (Leica) | ⚠️ an image whose pixels are absent from the `.lif`, whose `DimID` is not modelled, or whose declared size overflows the reader is refused with its reason; the others open |
 | CZI (Zeiss) | ⚠️ uncompressed and Zstd; JPEG-XR needs `--features jpegxr`; a scene that lost a full-resolution tile is refused with its reason |
 | ND2 (Nikon) | ⚠️ uncompressed frames only (lossless/lossy and legacy JPEG2000 refused) |
+| MRC2014 | ⚠️ one scene; MODE 1, 2 and 6 only; ISPG 0, 1–230 or 401–630 |
 | OIB · OIF (Olympus) | detected, `NotImplemented` |
 
 ⚠️ means the format opens only part of what it can hold; the reader refuses the
@@ -79,6 +80,14 @@ rest rather than guess:
   legacy JPEG2000 ND2 are refused. `uiBpcInMemory` must be 8, 16 or 32 bits, and
   the experiment loops are limited to time, Z-stack and XY-position — a spectral
   loop is skipped, any other loop type is refused.
+- **MRC2014** — one scene: a stack of images (`ISPG 0`), one volume
+  (`ISPG 1–230`, with a Z step) or a stack of volumes (`ISPG 401–630`, split into
+  time points and sections, refused when `MZ` is zero or does not divide `NZ`).
+  MODE 1, 2 and 6 are read as I16, F32 and U16; MODE 0 (signed 8-bit), the
+  complex modes (3, 4), 16-bit float (12) and 4-bit packed (101) are refused
+  rather than converted, and so are an axis order other than the standard
+  1/2/3, a non-positive extent, a negative extended-header length and a data
+  size that runs past the end of the file.
 
 ## API
 
