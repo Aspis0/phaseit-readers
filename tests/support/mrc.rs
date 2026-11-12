@@ -180,7 +180,7 @@ fn samples_i16(nx: usize, ny: usize, section: usize) -> Vec<i16> {
         .collect()
 }
 
-/// The sample of section `section` at `(x, y)` the builders write.
+/// The sample the builders write for section `section` at `(y, x)`; x is the fastest axis.
 pub fn sample_at(section: usize, y: usize, x: usize) -> i16 {
     (section * 1000 + y * 10 + x) as i16
 }

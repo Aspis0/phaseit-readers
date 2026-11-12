@@ -4,8 +4,6 @@
 
 mod support;
 
-use std::path::{Path, PathBuf};
-
 use phasit_imread::detect_from;
 use phasit_imread::mrc_reader::MrcReader;
 use phasit_imread::types::{Dims5, PixelRect};
@@ -380,10 +378,22 @@ fn every_mrc_extension_is_detected_and_a_text_file_is_not() {
 }
 
 #[test]
+fn a_mixed_little_endian_machst_is_still_little_endian() {
+    let file = MrcFile {
+        machst: Some([0x44, 0x41]),
+        ..MrcFile::i16(4, 3, 2)
+    };
+    let (_path, reader) = open(&file, "mixed_stamp");
+    assert_eq!(i16_plane(&reader, 0, 0), section_i16(4, 3, 0));
+    assert_eq!(i16_plane(&reader, 0, 1), section_i16(4, 3, 1));
+}
+
+#[test]
 fn open_routes_an_mrc_file_to_the_mrc_reader() {
-    let path: PathBuf = scratch("routed").to_path_buf();
+    // `Scratch` owns the file and removes it on drop, so even a failed assertion leaves nothing behind.
+    let path = scratch("routed");
     MrcFile::i16(4, 3, 1).write(&path);
-    let reader = phasit_imread::open(Path::new(&path)).expect("open through the dispatcher");
+    let reader = phasit_imread::open(&path).expect("open through the dispatcher");
     assert_eq!(reader.meta().scene_count(), 1);
     assert_eq!(reader.meta().scene(0).unwrap().dtype, DType::I16);
 }
