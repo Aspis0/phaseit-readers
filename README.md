@@ -15,6 +15,7 @@ no network. GPL-free (see `THIRD-PARTY-NOTICES.md`).
 | ND2 (Nikon) | ⚠️ uncompressed frames only (lossless/lossy and legacy JPEG2000 refused) |
 | MRC2014 | ⚠️ one scene; MODE 1, 2 and 6 only; ISPG 0, 1–230 or 401–630 |
 | DeltaVision | ⚠️ one scene; MODE 0, 1, 2 and 6 only; ImgSequence 0, 1 or 2; W ≤ 5 |
+| ICS/IDS | ⚠️ one scene; versions 1.0 and 2.0; uncompressed and gzip; U8, U16, I16 and F32 |
 | OIB · OIF (Olympus) | detected, `NotImplemented` |
 
 ⚠️ means the format opens only part of what it can hold; the reader refuses the
@@ -100,6 +101,21 @@ rest rather than guess:
   header (NumIntegers + NumFloats words) lives inside the `next` bytes, so it
   shifts nothing; only the consistency of the two is checked. The emission
   wavelengths are not published because the metadata has no field for them.
+- **ICS/IDS** (Image Cytometry Standard) — one scene: the axes of the file's own
+  `layout order`, fastest first, so a plane is read as one block only when x and
+  y come first and is gathered by the axis strides otherwise. Version 2.0 keeps
+  the pixels after `end`; version 1.0 keeps them in a separate `.ids` file with
+  the same stem, and an `.ids` is opened through its `.ics` header. The sample
+  types unsigned 8 and 16, signed 16 and real 32 are read; every other
+  combination (complex, 32- and 64-bit integer, real 64, signed 8) is refused
+  rather than converted, and so are a version other than 1.0 or 2.0, an unknown,
+  repeated or missing x/y axis, a non-positive or non-integer extent, a
+  `layout parameters` that disagrees with `order` or `sizes`, a header with no
+  `end` inside 1 MiB, the old Unix `compress`, a byte order that is neither
+  `1 … k` nor `k … 2 1` (or an absent one for a wide sample), a gzip file whose two
+  fastest axes are not x then y, and data past the end of the file. A
+  gzip plane costs the whole stream before it: there is no index into a deflated
+  file. `region` is the trait default.
 
 ## API
 

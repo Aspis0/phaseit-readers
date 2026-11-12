@@ -6,6 +6,7 @@
 
 pub mod czi;
 pub mod czi_write;
+pub mod ics;
 pub mod lif;
 pub mod lsm;
 pub mod mrc;

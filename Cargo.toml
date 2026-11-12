@@ -6,7 +6,7 @@ edition = "2021"
 # uses, and no dependency of its graph declares a higher one - the highest is
 # `ruzstd 0.9.1` at 1.87, in the runtime graph.
 rust-version = "1.88"
-description = "Native Rust reader for proprietary microscopy image formats (TIFF/OME-TIFF, LSM, LIF, CZI, ND2, MRC2014, DeltaVision) — offline, in-process."
+description = "Native Rust reader for proprietary microscopy image formats (TIFF/OME-TIFF, LSM, LIF, CZI, ND2, MRC2014, DeltaVision, ICS/IDS) — offline, in-process."
 license = "Apache-2.0"   # see LICENSE and NOTICE in this crate
 authors = ["Eclose"]
 repository = "https://github.com/Aspis0/phaseit-readers"
