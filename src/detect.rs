@@ -21,6 +21,8 @@ pub enum Format {
     Nd2,
     /// MRC2014 (electron microscopy); the `MAP ` magic sits at offset 208, so only the extension detects it.
     Mrc,
+    /// DeltaVision (widefield/deconvolution); the nDVID magic sits at offset 96, so only the extension detects it.
+    Dv,
     Oib,
     /// Olympus OIF (text master file referencing external data).
     Oif,
@@ -88,6 +90,7 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
         "oif" => Ok(Format::Oif),
         "czi" => Ok(Format::Czi),
         "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" => Ok(Format::Mrc),
+        "dv" | "r3d" => Ok(Format::Dv),
         "tif" | "tiff" if is_ome => Ok(Format::OmeTiff),
         "tif" | "tiff" => Ok(Format::Tiff),
         other => Err(Error::Unsupported(format!(
@@ -115,6 +118,7 @@ pub fn open(path: &Path) -> Result<Box<dyn ImageReader>> {
         Format::Czi => Ok(Box::new(crate::czi_reader::CziReader::open(path)?)),
         Format::Nd2 => Ok(Box::new(crate::nd2_reader::Nd2Reader::open(path)?)),
         Format::Mrc => Ok(Box::new(crate::mrc_reader::MrcReader::open(path)?)),
+        Format::Dv => Ok(Box::new(crate::dv_reader::DvReader::open(path)?)),
         Format::Oib => Err(Error::NotImplemented(fmt)),
         Format::Oif => Err(Error::NotImplemented(fmt)),
     }
