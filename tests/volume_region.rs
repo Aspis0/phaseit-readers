@@ -103,6 +103,16 @@ fn a_16_bit_volume_equals_stacking_its_regions() {
         Box3::new(2, 1, 0, 2, 2, 1),
         "an I16 scene",
     );
+
+    let reader = TiffReader::open(&fixture("float32-gray.tif")).expect("open the float TIFF");
+    assert_stacked(
+        &reader,
+        0,
+        0,
+        0,
+        Box3::new(1, 1, 0, 2, 2, 1),
+        "an F32 scene",
+    );
 }
 
 #[test]

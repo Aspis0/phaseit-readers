@@ -44,19 +44,21 @@ pub trait ImageReader: Send + Sync {
     }
 
     /// Decodes the box `bx` of one channel at one time point as one [`Volume`], z-major then y then x.
-    /// The default loops `region` over the box's planes: byte-exact with stacking the regions, but not out-of-core.
+    /// The default loops `region` over the box's planes and appends each into one buffer reserved once: byte-exact with
+    /// stacking the regions, but not out-of-core, and the box's byte cap bounds the peak (the volume plus one plane).
     fn volume(&self, scene: usize, t: usize, c: usize, bx: Box3) -> Result<Volume> {
         let meta = self.scene_meta(scene)?;
         checked_box3("volume", &meta.dims, scene, t, c, bx)?;
-        // The byte cap is checked before the first plane is read: a box of many max-size planes would OOM the process.
-        Volume::checked_bytes(bx, meta.dtype, meta.samples)?;
+        // The cap is checked before the first byte is reserved, so a box past it never allocates.
+        let mut volume = Volume::new(bx, meta.dtype, meta.samples)?;
 
         let rect = PixelRect::new(bx.x, bx.y, bx.w, bx.h);
-        let mut planes = Vec::with_capacity(bx.d);
         for z in bx.z..bx.z + bx.d {
-            planes.push(self.region(scene, t, c, z, rect)?);
+            let plane = self.region(scene, t, c, z, rect)?;
+            // The plane leaves scope at the end of the iteration: the next one is read without it.
+            volume.push_plane(plane)?;
         }
-        Volume::stack(bx, planes)
+        Ok(volume)
     }
 
     /// The source's own stored pyramid for `scene`: the coarse levels the file carries itself.
