@@ -23,29 +23,39 @@ pub(super) enum SectionOrder {
 }
 
 pub(super) fn layout(header: &DvHeader, file_bytes: usize) -> Result<Layout> {
-    let w = if header.num_waves == 0 {
-        1
-    } else {
-        header.num_waves as usize
-    };
-    let t = if header.num_times == 0 {
-        1
-    } else {
-        header.num_times as usize
-    };
-    if w > 5 {
+    let (dims, section_order) = geometry(header)?;
+    let (data_offset, section_bytes) = window(header, file_bytes)?;
+    Ok(Layout {
+        dims,
+        x_um: px_size(header.dx),
+        y_um: px_size(header.dy),
+        z_um: px_size(header.dz),
+        data_offset,
+        section_bytes,
+        section_order,
+    })
+}
+
+/// The one scene's axes: `W = NumWaves` channels, `T = NumTimes` time points, and `Z = NZ / (W·T)` sections.
+fn geometry(header: &DvHeader) -> Result<(Dims5, SectionOrder)> {
+    let c = count("NumWaves", header.num_waves)?;
+    let t = count("NumTimes", header.num_times)?;
+    if c > WAVELENGTH_SLOTS {
         return Err(Error::Unsupported(format!(
-            "DeltaVision NumWaves is {w}: only five wavelength slots exist"
+            "DeltaVision NumWaves is {c}: only five wavelength slots exist"
         )));
     }
-    let z = header.nz / (w * t);
-    if z * w * t != header.nz {
+    let sections = c
+        .checked_mul(t)
+        .ok_or_else(|| Error::Parse("DeltaVision W * T overflows usize".to_string()))?;
+    let z = header.nz / sections;
+    if z * sections != header.nz {
         return Err(Error::Unsupported(format!(
             "DeltaVision NZ {} is not divisible by W * T ({} * {})",
-            header.nz, w, t
+            header.nz, c, t
         )));
     }
-    let order = match header.img_sequence {
+    let section_order = match header.img_sequence {
         0 => SectionOrder::Ztw,
         1 => SectionOrder::Wzt,
         2 => SectionOrder::Zwt,
@@ -55,13 +65,20 @@ pub(super) fn layout(header: &DvHeader, file_bytes: usize) -> Result<Layout> {
             )))
         }
     };
-    let dims = Dims5 {
-        t,
-        c: w,
-        z,
-        y: header.ny,
-        x: header.nx,
-    };
+    Ok((
+        Dims5 {
+            t,
+            c,
+            z,
+            y: header.ny,
+            x: header.nx,
+        },
+        section_order,
+    ))
+}
+
+/// `(byte offset of section 0, bytes of one section)`, checked against the end of the file.
+fn window(header: &DvHeader, file_bytes: usize) -> Result<(usize, usize)> {
     let section_bytes = header
         .nx
         .checked_mul(header.ny)
@@ -76,21 +93,29 @@ pub(super) fn layout(header: &DvHeader, file_bytes: usize) -> Result<Layout> {
         .ok_or_else(|| Error::Parse("DeltaVision data size overflows usize".to_string()))?;
     if end > file_bytes {
         return Err(Error::Parse(format!(
-            "DeltaVision data ends at byte {end} ({} section(s) of {section_bytes} bytes at offset {data_offset}), past the end of the {file_bytes}-byte file",
+            "DeltaVision data ends at byte {end} ({} section(s) of {section_bytes} bytes at offset {data_offset}), \
+             past the end of the {file_bytes}-byte file",
             header.nz
         )));
     }
-    Ok(Layout {
-        dims,
-        x_um: px_size(header.dx),
-        y_um: px_size(header.dy),
-        z_um: px_size(header.dz),
-        data_offset,
-        section_bytes,
-        section_order: order,
-    })
+    Ok((data_offset, section_bytes))
 }
 
+/// The five wavelength slots DeltaVision defines.
+const WAVELENGTH_SLOTS: usize = 5;
+
+/// A count of time points or channels: 0 means 1, a negative value is a corrupt header rather than a huge count.
+fn count(name: &str, value: i16) -> Result<usize> {
+    match value {
+        0 => Ok(1),
+        value if value > 0 => Ok(value as usize),
+        value => Err(Error::Unsupported(format!(
+            "DeltaVision {name} is {value}: a count cannot be negative"
+        ))),
+    }
+}
+
+/// µm per pixel along one axis; `None` when the file states no usable distance.
 fn px_size(value: f32) -> Option<f32> {
     if value.is_finite() && value > 0.0 {
         Some(value)

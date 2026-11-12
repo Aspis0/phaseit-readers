@@ -20,6 +20,9 @@ pub struct DvFile {
     /// Extended-header override written at word 23; `None` writes `next`.
     pub next_word: Option<i32>,
     pub n_dvid: i16,
+    /// Per-section extended-header word counts at bytes 128 and 130.
+    pub num_integers: i16,
+    pub num_floats: i16,
     pub num_times: i16,
     pub img_sequence: i16,
     pub num_waves: i16,
@@ -93,6 +96,8 @@ impl DvFile {
             next: 0,
             next_word: None,
             n_dvid: NDVID_LE,
+            num_integers: 0,
+            num_floats: 0,
             num_times: t as i16,
             img_sequence: seq,
             num_waves: w as i16,
@@ -131,6 +136,8 @@ impl DvFile {
         }
         self.put(&mut out, 23, self.next_word.unwrap_or(self.next as i32));
         self.short(&mut out, 96, self.n_dvid);
+        self.short(&mut out, 128, self.num_integers);
+        self.short(&mut out, 130, self.num_floats);
         self.short(&mut out, 180, self.num_times);
         self.short(&mut out, 182, self.img_sequence);
         self.short(&mut out, 196, self.num_waves);

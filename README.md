@@ -92,11 +92,14 @@ rest rather than guess:
 - **DeltaVision** — one scene: a stack of sections in ZTW, WZT or ZWT order
   (`ImgSequence 0`, `1` or `2`), split into time points, channels and sections,
   refused when `NZ` is not divisible by `W * T`, `W` is above 5, a dimension
-  is non-positive, `next` is negative or the data runs past the end of the
-  file. MODE 0, 1, 2 and 6 are read as U8, I16, F32 and U16; the complex modes
-  (3, 4), 16-bit integer of unclear meaning (5) and 32-bit integer (7) are
-  refused rather than converted. The emission wavelengths are not published
-  because the metadata has no field for them.
+  is non-positive, `NumTimes`/`NumWaves` is negative, `next` is negative or
+  smaller than the per-section extended header the header states, or the data
+  runs past the end of the file. MODE 0, 1, 2 and 6 are read as U8, I16, F32
+  and U16; the complex modes (3, 4), 16-bit integer of unclear meaning (5) and
+  32-bit integer (7) are refused rather than converted. The per-section extended
+  header (NumIntegers + NumFloats words) lives inside the `next` bytes, so it
+  shifts nothing; only the consistency of the two is checked. The emission
+  wavelengths are not published because the metadata has no field for them.
 
 ## API
 

@@ -8,7 +8,9 @@ pub(super) const HEADER_BYTES: usize = 1024;
 const NDVID_OFFSET: usize = 96;
 const NDVID_LE: i16 = -16224;
 
-#[derive(Debug)]
+/// Bytes of extended header one section carries per integer or float word.
+const EXTENDED_WORD_BYTES: usize = 4;
+
 pub(super) struct DvHeader {
     pub nx: usize,
     pub ny: usize,
@@ -40,9 +42,9 @@ pub(super) fn parse(buf: &[u8]) -> Result<DvHeader> {
     let dy = real(buf, 11, endian)?;
     let dz = real(buf, 12, endian)?;
     let next = extended_bytes(word(buf, 23, endian)?)?;
-    let num_times = short(buf, 180, endian)?;
-    let img_sequence = short(buf, 182, endian)?;
-    let num_waves = short(buf, 196, endian)?;
+    let num_integers = short(buf, 128, endian)?;
+    let num_floats = short(buf, 130, endian)?;
+    extended_header_fits(next, nz, num_integers, num_floats)?;
     Ok(DvHeader {
         nx,
         ny,
@@ -51,14 +53,15 @@ pub(super) fn parse(buf: &[u8]) -> Result<DvHeader> {
         dy,
         dz,
         next,
-        num_times,
-        img_sequence,
-        num_waves,
+        num_times: short(buf, 180, endian)?,
+        img_sequence: short(buf, 182, endian)?,
+        num_waves: short(buf, 196, endian)?,
         endian,
         dtype,
     })
 }
 
+/// `0x44 0x41`-style stamps do not exist here: nDVID is −16224 in the file's own byte order and no other value.
 fn byte_order(buf: &[u8]) -> Result<Endian> {
     let raw = buf
         .get(NDVID_OFFSET..NDVID_OFFSET + 2)
@@ -76,6 +79,7 @@ fn byte_order(buf: &[u8]) -> Result<Endian> {
     ))
 }
 
+/// MODE is the sample type: the crate represents U8, I16, U16 and F32 exactly.
 fn dtype_of(mode: i32) -> Result<DType> {
     match mode {
         0 => Ok(DType::U8),
@@ -91,10 +95,45 @@ fn dtype_of(mode: i32) -> Result<DType> {
     }
 }
 
+/// The per-section extended header — NumIntegers and NumFloats four-byte words of every section — lives inside the
+/// `next` bytes after the main header, not between the sections, so a `next` too small for it describes a file whose
+/// sections and header disagree.
+fn extended_header_fits(next: usize, nz: usize, num_integers: i16, num_floats: i16) -> Result<()> {
+    let integers = extended_words("NumIntegers", num_integers)?;
+    let floats = extended_words("NumFloats", num_floats)?;
+    let words = integers.checked_add(floats).ok_or_else(|| {
+        Error::Parse("DeltaVision extended-header word count overflows usize".to_string())
+    })?;
+    let bytes = words
+        .checked_mul(EXTENDED_WORD_BYTES)
+        .and_then(|bytes| bytes.checked_mul(nz))
+        .ok_or_else(|| {
+            Error::Parse("DeltaVision extended-header size overflows usize".to_string())
+        })?;
+    if bytes > next {
+        return Err(Error::Parse(format!(
+            "DeltaVision NEXT is {next} bytes, too small for the per-section extended header the header states \
+             ({nz} section(s) of {integers} integer and {floats} float word(s), {bytes} bytes)"
+        )));
+    }
+    Ok(())
+}
+
+/// An extent of zero or less is a corrupt header, not an empty image.
 fn extent(name: &str, value: i32) -> Result<usize> {
     if value <= 0 {
         return Err(Error::Unsupported(format!(
             "DeltaVision {name} is {value}: an image extent must be positive"
+        )));
+    }
+    Ok(value as usize)
+}
+
+/// A count of extended-header words: none is 0, and a negative value cannot be a count.
+fn extended_words(name: &str, value: i16) -> Result<usize> {
+    if value < 0 {
+        return Err(Error::Unsupported(format!(
+            "DeltaVision {name} is {value}: a word count cannot be negative"
         )));
     }
     Ok(value as usize)
@@ -109,6 +148,7 @@ fn extended_bytes(next: i32) -> Result<usize> {
     Ok(next as usize)
 }
 
+/// Word `index` (0-based) is the i32 at byte `4 * index`.
 fn word(buf: &[u8], index: usize, endian: Endian) -> Result<i32> {
     let at = index * 4;
     let raw = buf

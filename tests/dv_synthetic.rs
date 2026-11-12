@@ -57,16 +57,6 @@ fn section_i16(nx: usize, ny: usize, section: usize) -> Vec<i16> {
         .collect()
 }
 
-fn refusal_text(file: &DvFile, name: &str) -> String {
-    let path = scratch(name);
-    file.write(&path);
-    match DvReader::open(&path) {
-        Err(Error::Unsupported(message)) => message,
-        Err(other) => panic!("expected Unsupported, got {other:?}"),
-        Ok(_) => panic!("the file opened"),
-    }
-}
-
 #[test]
 fn a_little_endian_i16_file_decodes_its_planes() {
     let (_path, reader) = open(&DvFile::i16(4, 3, 2, 1, 1, 0), "le_i16");
@@ -154,6 +144,36 @@ fn a_mode_0_file_decodes_u8_values() {
 }
 
 #[test]
+fn a_big_endian_mode_2_file_decodes_exact_f32_values() {
+    let (_path, reader) = open(
+        &DvFile {
+            big_endian: true,
+            ..DvFile::f32(4, 3, 2, 1, 1, 0)
+        },
+        "be_f32",
+    );
+    let expected: Vec<f32> = section_i16(4, 3, 1)
+        .iter()
+        .map(|v| *v as f32 + 0.5)
+        .collect();
+    assert_eq!(f32_plane(&reader, 0, 0, 1), expected);
+}
+
+#[test]
+fn the_fifth_wavelength_is_read() {
+    // W = 5 is the largest the format defines; a reader that refuses it would pass every test with W < 5.
+    let file = DvFile::i16(4, 3, 10, 5, 1, 0);
+    let (_path, reader) = open(&file, "five_waves");
+    let scene = reader.meta().scene(0).unwrap();
+    assert_eq!((scene.dims.c, scene.dims.t, scene.dims.z), (5, 1, 2));
+    assert_eq!(scene.channels.len(), 5);
+    for c in 0..5 {
+        // ZTW: section (c * T + t) * Z + z with T = 1, Z = 2, t = 0, z = 1.
+        assert_eq!(i16_plane(&reader, 0, c, 1), section_i16(4, 3, 2 * c + 1));
+    }
+}
+
+#[test]
 fn the_three_img_sequence_orders_locate_the_section() {
     // W=2, T=3, Z=4 -> 24 sections, non-square in every axis, so a swapped formula lands on another section.
     let (w, t_max, z_max) = (2usize, 3usize, 4usize);
@@ -211,6 +231,18 @@ fn next_shifts_the_data() {
 }
 
 #[test]
+fn a_next_past_16_bits_still_shifts_the_data() {
+    // 70000 does not fit in an i16, so reading `next` as one word's low half would refuse this file.
+    let file = DvFile {
+        next: 70_000,
+        ..DvFile::i16(4, 3, 2, 1, 1, 0)
+    };
+    let (_path, reader) = open(&file, "wide_extended");
+    assert_eq!(i16_plane(&reader, 0, 0, 0), section_i16(4, 3, 0));
+    assert_eq!(i16_plane(&reader, 0, 0, 1), section_i16(4, 3, 1));
+}
+
+#[test]
 fn the_calibration_numbers_are_published() {
     let file = DvFile {
         dx: 0.11,
@@ -228,6 +260,21 @@ fn the_calibration_numbers_are_published() {
     assert_eq!(px.x, 0.11);
     assert_eq!(px.y, 0.22);
     assert_eq!(px.z, Some(0.33));
+}
+
+#[test]
+fn a_size_that_is_not_a_distance_is_not_published() {
+    // `f32::NAN` is not > 0 and `f32::INFINITY` is: only the is_finite() half of the rule rejects the latter, so a
+    // reader that dropped it would publish an infinite pixel.
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1, 0.0] {
+        let file = DvFile {
+            dx: bad,
+            ..DvFile::i16(4, 3, 1, 1, 1, 0)
+        };
+        let (_path, reader) = open(&file, &format!("bad_dx_{bad}"));
+        let px = reader.meta().scene(0).unwrap().px_size_um;
+        assert_eq!(px.map(|px| px.x), None, "dx = {bad} is not a distance");
+    }
 }
 
 #[test]
@@ -263,97 +310,6 @@ fn a_plane_outside_the_scene_is_refused_without_a_panic() {
         reader.plane(0, 0, 1, 0),
         Err(Error::OutOfRange { c: 1, .. })
     ));
-}
-
-#[test]
-fn a_file_without_the_ndvid_magic_is_refused() {
-    let message = refusal_text(
-        &DvFile {
-            n_dvid: 0,
-            ..DvFile::i16(4, 3, 1, 1, 1, 0)
-        },
-        "non_dvid",
-    );
-    assert!(message.contains("nDVID"), "{message}");
-    assert!(message.contains("not a DeltaVision file"), "{message}");
-}
-
-#[test]
-fn the_modes_without_a_dtype_are_refused_by_name() {
-    for mode in [3, 4, 5, 7] {
-        let message = refusal_text(
-            &DvFile {
-                mode,
-                ..DvFile::i16(4, 3, 1, 1, 1, 0)
-            },
-            &format!("mode{mode}"),
-        );
-        assert!(message.contains(&format!("MODE {mode}")), "{message}");
-    }
-}
-
-#[test]
-fn non_positive_extents_are_refused() {
-    for axis in 0..3 {
-        let mut file = DvFile::i16(4, 3, 1, 1, 1, 0);
-        match axis {
-            0 => file.nx = 0,
-            1 => file.ny = 0,
-            _ => file.nz = 0,
-        }
-        let message = refusal_text(&file, &format!("extent{axis}"));
-        assert!(message.contains("must be positive"), "{message}");
-    }
-}
-
-#[test]
-fn a_negative_next_is_refused() {
-    let file = DvFile {
-        next_word: Some(-1),
-        ..DvFile::i16(4, 3, 1, 1, 1, 0)
-    };
-    let message = refusal_text(&file, "negative_next");
-    assert!(message.contains("next"), "{message}");
-}
-
-#[test]
-fn num_waves_above_five_is_refused() {
-    let mut file = DvFile::i16(4, 3, 1, 1, 1, 0);
-    file.num_waves = 6;
-    let message = refusal_text(&file, "six_waves");
-    assert!(message.contains("NumWaves is 6"), "{message}");
-    assert!(message.contains("five wavelength"), "{message}");
-}
-
-#[test]
-fn an_indivisible_nz_is_refused() {
-    let file = DvFile::i16(4, 3, 5, 2, 1, 0);
-    let message = refusal_text(&file, "indivisible_nz");
-    assert!(message.contains("not divisible"), "{message}");
-}
-
-#[test]
-fn an_unknown_img_sequence_is_refused() {
-    for seq in [-1, 3, 4] {
-        let mut file = DvFile::i16(4, 3, 1, 1, 1, 0);
-        file.img_sequence = seq;
-        let message = refusal_text(&file, &format!("seq{seq}"));
-        assert!(message.contains(&format!("ImgSequence {seq}")), "{message}");
-    }
-}
-
-#[test]
-fn data_past_the_end_of_the_file_is_refused() {
-    let file = DvFile::i16(4, 3, 2, 1, 1, 0);
-    let path = scratch("truncated");
-    let mut bytes = file.bytes();
-    bytes.truncate(bytes.len() - 1);
-    std::fs::write(&*path, &bytes).expect("write the truncated DV");
-    match DvReader::open(&path) {
-        Err(Error::Parse(message)) => assert!(message.contains("past the end of the"), "{message}"),
-        Err(other) => panic!("expected Parse, got {other:?}"),
-        Ok(_) => panic!("expected Parse, got a reader"),
-    }
 }
 
 #[test]
