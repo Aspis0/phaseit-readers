@@ -183,7 +183,8 @@ mod tests {
     fn bricks_cover_a_scene_that_is_not_a_multiple_of_the_brick() {
         let d = dims(130, 64, 7);
         let boxes: Vec<Box3> = bricks(d, (64, 64, 4)).collect();
-        assert_eq!(boxes.len(), 3 * 1 * 2);
+        // 3 bricks on x, 1 on y, 2 on z.
+        assert_eq!(boxes.len(), 6);
 
         let mut seen = vec![0u32; 130 * 64 * 7];
         for bx in &boxes {
