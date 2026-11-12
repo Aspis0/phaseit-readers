@@ -112,8 +112,8 @@ rest rather than guess:
   repeated or missing x/y axis, a non-positive or non-integer extent, a
   `layout parameters` that disagrees with `order` or `sizes`, a header with no
   `end` inside 1 MiB, the old Unix `compress`, a byte order that is neither
-  `1 … k` nor `k … 2 1` (or an absent one for a wide sample), a gzip plane whose
-  x and y are not the two fastest axes, and data past the end of the file. A
+  `1 … k` nor `k … 2 1` (or an absent one for a wide sample), a gzip file whose two
+  fastest axes are not x then y, and data past the end of the file. A
   gzip plane costs the whole stream before it: there is no index into a deflated
   file. `region` is the trait default.
 

@@ -42,7 +42,7 @@ fn minimal() -> Vec<&'static str> {
 /// `lines` up to `end`, which the caller drops from the data offset.
 fn parse(lines: &[&str]) -> Result<IcsHeader, Error> {
     let buf = header_text(lines, '\t', false);
-    let end = end_of(&buf).expect("the header has an end");
+    let end = end_of(&buf, false).expect("the header has an end");
     parse_fields(&buf, end)
 }
 
@@ -67,7 +67,7 @@ fn refusal(lines: &[&str]) -> String {
 #[test]
 fn the_end_field_ends_the_header_and_the_pixels_start_after_it() {
     let buf = header_text(&minimal(), '\t', false);
-    let end = end_of(&buf).expect("the header has an end");
+    let end = end_of(&buf, false).expect("the header has an end");
     assert_eq!(&buf[end - 4..end], b"end\n");
     let header = parse_fields(&buf, end).expect("the header parses");
     assert_eq!(header.storage, Storage::Inline);
@@ -84,7 +84,7 @@ fn the_end_field_ends_the_header_and_the_pixels_start_after_it() {
 #[test]
 fn cr_lf_lines_and_another_field_separator_parse_the_same_fields() {
     let buf = header_text(&minimal(), ';', true);
-    let end = end_of(&buf).expect("the header has an end");
+    let end = end_of(&buf, false).expect("the header has an end");
     let header = parse_fields(&buf, end).expect("the header parses");
     assert_eq!(header.axes, vec!["x", "y", "z"]);
     assert_eq!(header.units, vec!["micrometers"; 3]);
@@ -96,8 +96,8 @@ fn a_field_that_holds_the_end_word_is_not_the_end() {
     lines.insert(1, "history\tend");
     let buf = header_text(&lines, '\t', false);
     // The `end` inside a value is a value: only the line whose only field is `end` ends the header.
-    assert!(end_of(&buf).is_some(), "the real end line is found");
-    let header = parse_fields(&buf, end_of(&buf).expect("the header has an end"))
+    assert!(end_of(&buf, false).is_some(), "the real end line is found");
+    let header = parse_fields(&buf, end_of(&buf, false).expect("the header has an end"))
         .expect("the header parses");
     assert_eq!(header.axes, vec!["x", "y", "z"]);
 }
@@ -106,7 +106,49 @@ fn a_field_that_holds_the_end_word_is_not_the_end() {
 fn the_end_line_must_be_present() {
     let lines: Vec<&str> = minimal().into_iter().filter(|l| *l != "end").collect();
     let buf = header_text(&lines, '\t', false);
-    assert!(end_of(&buf).is_none(), "no end line, no header");
+    assert!(end_of(&buf, false).is_none(), "no end line, no header");
+}
+
+#[test]
+fn an_end_line_with_a_trailing_separator_ends_the_header_too() {
+    // `end_of` and `parse_fields` must agree on the same line: a writer that left a separator behind is not a
+    // different file.
+    for line in ["end", "end\t", "end\t\t"] {
+        let lines: Vec<&str> = minimal()
+            .into_iter()
+            .filter(|l| *l != "end")
+            .chain([line])
+            .collect();
+        let buf = header_text(&lines, '\t', false);
+        let end = end_of(&buf, false).unwrap_or_else(|| panic!("{line:?} ends the header"));
+        let header = parse_fields(&buf, end).unwrap_or_else(|_| panic!("{line:?} parses"));
+        assert_eq!(header.axes, vec!["x", "y", "z"], "{line:?}");
+        assert_eq!(buf[end - 1], b'\n', "the offset follows the line separator");
+        assert!(line.starts_with("end"), "{line:?}");
+    }
+}
+
+#[test]
+fn an_unterminated_end_line_is_not_an_end_until_its_separator_arrives() {
+    // The bytes of a header whose `end` is the last thing read: the offset would be one past what is known.
+    let buf = header_text(&minimal(), '\t', false);
+    let end = end_of(&buf, false).expect("the header has an end");
+    assert!(end <= buf.len(), "the offset is inside the buffer");
+    assert!(
+        end_of(&buf[..end - 1], false).is_none(),
+        "without the separator it is not an end"
+    );
+}
+
+#[test]
+fn an_end_line_at_the_end_of_the_file_ends_the_header_without_a_separator() {
+    // The file stops at the `end` field, so there is no separator after it and the pixels start at the last byte read.
+    let buf = header_text(&minimal(), '\t', false);
+    let trimmed = &buf[..buf.len() - 1];
+    let end = end_of(trimmed, true).expect("the end of the file ends the header");
+    assert_eq!(end, trimmed.len(), "the offset is the last byte read");
+    let header = parse_fields(trimmed, end).expect("the header parses");
+    assert_eq!(header.axes, vec!["x", "y", "z"]);
 }
 
 #[test]
@@ -271,6 +313,25 @@ fn the_data_must_fit_the_file() {
         Err(Error::Parse(message)) => assert!(message.contains("past the end of the"), "{message}"),
         Err(other) => panic!("expected Parse, got {other:?}"),
         Ok(_) => panic!("expected Parse, got a layout"),
+    }
+}
+
+#[test]
+fn an_uncompressed_plane_over_the_decode_ceiling_is_refused_before_it_is_allocated() {
+    // A stored plane of 4.9 GB: the ceiling prices it before a byte of it is reserved. Such a file would have to
+    // hold the whole plane, so the layout is the level that refuses it.
+    let mut lines = minimal();
+    lines[1] = "layout\tparameters\t3";
+    lines[2] = "layout\torder\tbits\tx\ty";
+    lines[3] = "layout\tsizes\t8\t70000\t70000";
+    lines[7] = "representation\tbyte_order\t1";
+    let header = parse(&lines).expect("the header parses");
+    let layout = layout(&header, None).expect("the layout builds");
+    match layout.plane_bytes() {
+        Err(Error::OversizedAllocation { requested, cap }) => {
+            assert!(requested > cap, "the plane is over the ceiling");
+        }
+        other => panic!("expected OversizedAllocation, got {other:?}"),
     }
 }
 

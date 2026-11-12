@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 
 /// A header without `end` inside this cap is refused; the cap keeps a corrupt file from being read whole.
-pub(super) const MAX_HEADER_BYTES: u64 = 1024 * 1024;
+const MAX_HEADER_BYTES: u64 = 1024 * 1024;
 
 /// Bytes asked for per read; a header far below the cap costs one.
 const READ_CHUNK: usize = 32 * 1024;
@@ -43,6 +43,26 @@ pub(super) struct IcsHeader {
     pub scale: Vec<f32>,
     /// `parameter units` after its bits word, aligned with `axes`.
     pub units: Vec<String>,
+}
+
+impl IcsHeader {
+    /// The defaults a line may override: version 1.0, stored pixels, integer unsigned samples, uncompressed.
+    fn empty(data_offset: usize) -> IcsHeader {
+        IcsHeader {
+            version: String::new(),
+            storage: Storage::Ids,
+            data_offset,
+            compression: "uncompressed".to_string(),
+            bits: 0,
+            format: "integer".to_string(),
+            sign: "unsigned".to_string(),
+            byte_order: None,
+            axes: Vec::new(),
+            sizes: Vec::new(),
+            scale: Vec::new(),
+            units: Vec::new(),
+        }
+    }
 }
 
 /// Reads the header and resolves the file the pixels live in: the path itself for 2.0, the `.ids` sibling for 1.0.
@@ -97,14 +117,14 @@ fn parse(path: &Path) -> Result<IcsHeader> {
     let mut chunk = [0u8; READ_CHUNK];
     loop {
         let read = file.read(&mut chunk)?;
+        buf.extend_from_slice(&chunk[..read]);
+        if let Some(end) = end_of(&buf, read == 0) {
+            return parse_fields(&buf, end);
+        }
         if read == 0 {
             return Err(Error::Unsupported(
                 "not an ICS file: the header has no `end`".to_string(),
             ));
-        }
-        buf.extend_from_slice(&chunk[..read]);
-        if let Some(end) = end_of(&buf) {
-            return parse_fields(&buf, end);
         }
         if buf.len() as u64 >= MAX_HEADER_BYTES {
             return Err(Error::Unsupported(format!(
@@ -114,9 +134,10 @@ fn parse(path: &Path) -> Result<IcsHeader> {
     }
 }
 
-/// Byte offset just past the line whose only field is `end`.
-/// The scan stops at the field separator, so a header that lost its first two bytes never matches.
-pub(super) fn end_of(buf: &[u8]) -> Option<usize> {
+/// Byte offset just past the `end` line's own line separator.
+/// A line whose separator has not been read yet is not an end: it may still arrive in the next chunk, and `at_eof`
+/// says the buffer holds the whole file. The offset handed to [`parse_fields`] is then one this buffer has seen.
+pub(super) fn end_of(buf: &[u8], at_eof: bool) -> Option<usize> {
     let field = *buf.first()?;
     let line = *buf.get(1)?;
     let body = buf.get(2..)?;
@@ -127,15 +148,28 @@ pub(super) fn end_of(buf: &[u8]) -> Option<usize> {
             .position(|b| *b == line)
             .map(|past| at + past)
             .unwrap_or(body.len());
-        let mut fields = body[at..stop].split(|b| *b == field);
-        let only = fields.next().unwrap_or(&[]);
-        if (only == b"end" || only == b"end\r") && fields.next().is_none() {
-            // The line separator itself belongs to the header, so the pixels start after it.
-            return Some(usize::min(stop + 1, body.len()) + 2);
+        if stop == body.len() {
+            // The line has no separator in what has been read: only the end of the file makes it an end.
+            if at_eof && is_end(&body[at..], field) {
+                return Some(buf.len());
+            }
+            return None;
+        }
+        if is_end(&body[at..stop], field) {
+            // The separator after the field belongs to the header, so the pixels start after it.
+            return Some(stop + 3);
         }
         at = stop + 1;
     }
     None
+}
+
+/// The `end` line: the field `end` and, after it, nothing but separators (`end\r` on a CR LF file, `end\t` after a
+/// writer that left one). Shared with [`parse_fields`], so the two cannot disagree about the same line.
+fn is_end(raw: &[u8], field: u8) -> bool {
+    let mut fields = raw.split(|b| *b == field);
+    let first = fields.next().unwrap_or(&[]);
+    (first == b"end" || first == b"end\r") && fields.all(|f| f.is_empty())
 }
 
 pub(super) fn parse_fields(buf: &[u8], end: usize) -> Result<IcsHeader> {
@@ -145,20 +179,7 @@ pub(super) fn parse_fields(buf: &[u8], end: usize) -> Result<IcsHeader> {
     let line = *buf.get(1).ok_or_else(|| {
         Error::Unsupported("not an ICS file: it has no line separator".to_string())
     })?;
-    let mut header = IcsHeader {
-        version: String::new(),
-        storage: Storage::Ids,
-        data_offset: end,
-        compression: "uncompressed".to_string(),
-        bits: 0,
-        format: "integer".to_string(),
-        sign: "unsigned".to_string(),
-        byte_order: None,
-        axes: Vec::new(),
-        sizes: Vec::new(),
-        scale: Vec::new(),
-        units: Vec::new(),
-    };
+    let mut header = IcsHeader::empty(end);
     let mut declared = None;
     let mut saw_end = false;
     for raw in buf.get(2..end).unwrap_or_default().split(|b| *b == line) {
@@ -167,25 +188,12 @@ pub(super) fn parse_fields(buf: &[u8], end: usize) -> Result<IcsHeader> {
             .filter(|f| !f.is_empty())
             .map(|f| String::from_utf8_lossy(strip_cr(f)).into_owned())
             .collect();
-        let Some(category) = fields.first().map(String::as_str) else {
+        let Some((category, rest)) = fields.split_first().map(|(c, r)| (c.as_str(), r)) else {
             continue;
         };
-        let rest = &fields[1..];
-        let (subcategory, values) = match rest.split_first() {
-            Some((first, tail)) => (first.as_str(), tail),
-            None => ("", rest),
-        };
-        match category {
-            "ics_version" => header.version = value_of(category, rest)?.to_string(),
-            "layout" => layout(&mut header, subcategory, values, &mut declared)?,
-            "representation" => representation(&mut header, subcategory, values)?,
-            "parameter" => parameter(&mut header, subcategory, values)?,
-            "end" => {
-                saw_end = true;
-                break;
-            }
-            // `filename` names a file this reader never opens, `history` is provenance, the rest is unknown.
-            _ => {}
+        if apply(&mut header, category, rest, &mut declared)? {
+            saw_end = true;
+            break;
         }
     }
     if !saw_end {
@@ -196,6 +204,29 @@ pub(super) fn parse_fields(buf: &[u8], end: usize) -> Result<IcsHeader> {
     finish(header, declared)
 }
 
+/// One header line; `true` when it is the `end` line. An unknown category and `filename`/`history` are ignored.
+fn apply(
+    header: &mut IcsHeader,
+    category: &str,
+    rest: &[String],
+    declared: &mut Option<usize>,
+) -> Result<bool> {
+    // `ics_version` and `filename` carry their value where another category carries a subcategory.
+    let (subcategory, values) = match rest.split_first() {
+        Some((first, tail)) => (first.as_str(), tail),
+        None => ("", rest),
+    };
+    match category {
+        "ics_version" => header.version = value_of(category, rest)?.to_string(),
+        "layout" => layout(header, subcategory, values, declared)?,
+        "representation" => representation(header, subcategory, values)?,
+        "parameter" => parameter(header, subcategory, values)?,
+        "end" => return Ok(true),
+        _ => {}
+    }
+    Ok(false)
+}
+
 fn layout(
     header: &mut IcsHeader,
     subcategory: &str,
@@ -204,10 +235,15 @@ fn layout(
 ) -> Result<()> {
     match subcategory {
         // The order's first word is `bits`; the axis names follow it.
-        "order" => header.axes = axis_names(&values[1..])?,
+        "order" => {
+            if values.is_empty() {
+                return Err(Error::Parse("ICS layout order states no value".to_string()));
+            }
+            header.axes = axis_names(after_bits(values))?;
+        }
         "sizes" => {
             header.bits = count("layout sizes bits", values.first())?;
-            header.sizes = values[1..]
+            header.sizes = after_bits(values)
                 .iter()
                 .map(|v| count("layout sizes", Some(v)))
                 .collect::<Result<Vec<usize>>>()?;
@@ -231,8 +267,15 @@ fn representation(header: &mut IcsHeader, subcategory: &str, values: &[String]) 
 }
 
 fn parameter(header: &mut IcsHeader, subcategory: &str, values: &[String]) -> Result<()> {
+    if values.is_empty() {
+        let what = match subcategory {
+            "" => "parameter".to_string(),
+            other => format!("parameter {other}"),
+        };
+        return Err(Error::Parse(format!("ICS {what} states no value")));
+    }
     // Both lines carry a bits word first, then one entry per axis of the order.
-    let entries = &values[1..];
+    let entries = after_bits(values);
     match subcategory {
         "scale" => {
             header.scale = entries
@@ -317,6 +360,11 @@ fn axis_names(values: &[String]) -> Result<Vec<String>> {
         }
     }
     Ok(out)
+}
+
+/// The entries after the leading `bits` word: a line that stops before it has none, which the caller reports.
+fn after_bits(values: &[String]) -> &[String] {
+    values.get(1..).unwrap_or_default()
 }
 
 /// A count of entries: text that is not a number is a broken header, a negative value cannot be a count.

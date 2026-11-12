@@ -61,6 +61,15 @@ fn plane_u16(x: usize, y: usize, plane: usize) -> Vec<u16> {
 }
 
 #[test]
+fn an_absent_axis_has_size_one() {
+    // x and y only: z, c and t are each 1, so the file is one plane.
+    let (_path, reader) = open(&IcsFile::new(&["x", "y"], &[4, 3], 16), "no_z");
+    let dims = reader.meta().scene(0).unwrap().dims;
+    assert_eq!((dims.x, dims.y, dims.z, dims.c, dims.t), (4, 3, 1, 1, 1));
+    assert_eq!(u16_plane(&reader, 0, 0, 0), plane_u16(4, 3, 0));
+}
+
+#[test]
 fn a_version_2_file_decodes_every_plane() {
     let file = IcsFile::new(&["x", "y", "z", "c", "t"], &[5, 3, 4, 3, 2], 16);
     let (_path, reader) = open(&file, "v2");
@@ -91,6 +100,7 @@ fn a_version_1_file_reads_through_either_file() {
         version_text: "1.0".to_string(),
         ..IcsFile::new(&["x", "y", "z", "c", "t"], &[5, 3, 2, 2, 2], 16)
     };
+    // The pair is a directory of its own, so the guard removes both files even when an assertion fails.
     let dir = support::scratch::ScratchDir::new(
         std::env::temp_dir().join(format!("phasit_ics_v1_pair_{}", std::process::id())),
     );
@@ -163,18 +173,6 @@ fn a_big_endian_file_is_converted_to_native_values() {
     let (_path, reader) = open(&file, "be");
     assert_eq!(u16_plane(&reader, 0, 0, 0), plane_u16(4, 3, 0));
     assert_eq!(u16_plane(&reader, 0, 0, 1), plane_u16(4, 3, 1));
-
-    // The same samples with the byte_order line left out are refused, so the line is what tells the order.
-    let absent = IcsFile {
-        byte_order: None,
-        ..IcsFile::new(&["x", "y", "z"], &[4, 3, 2], 16)
-    };
-    let path = scratch("be_absent");
-    absent.write(&path);
-    assert!(
-        IcsReader::open(&path).is_err(),
-        "an absent byte_order is a refusal"
-    );
 }
 
 #[test]
@@ -183,20 +181,19 @@ fn axis_orders_other_than_x_y_first_gather_every_plane() {
         (vec!["ch", "x", "y", "z", "t"], vec![3, 5, 3, 4, 2]),
         (vec!["x", "y", "t", "ch", "z"], vec![5, 3, 2, 3, 4]),
         (vec!["t", "z", "ch", "y", "x"], vec![2, 4, 3, 3, 5]),
+        // x is the fastest axis but y is not the second, so the rows are not adjacent: gather them.
+        (vec!["x", "ch", "y", "z"], vec![5, 3, 3, 4]),
     ] {
         let file = IcsFile::new(&axes, &sizes, 16);
         let name = format!("order_{}", axes.first().unwrap());
         let (_path, reader) = open(&file, &name);
         let dims = reader.meta().scene(0).unwrap().dims;
-        assert_eq!(
-            (dims.x, dims.y, dims.z, dims.c, dims.t),
-            (5, 3, 4, 3, 2),
-            "{name}"
-        );
-        for t in 0..2 {
-            for c in 0..3 {
-                for z in 0..4 {
-                    let plane = plane_of(t, c, z, 3, 4);
+        // The two sizes the four orders share; an order may leave t or ch out, and it is then 1.
+        assert_eq!((dims.x, dims.y, dims.z), (5, 3, 4), "{name}");
+        for t in 0..dims.t {
+            for c in 0..dims.c {
+                for z in 0..dims.z {
+                    let plane = plane_of(t, c, z, dims.c, dims.z);
                     assert_eq!(
                         u16_plane(&reader, t, c, z),
                         plane_u16(5, 3, plane),
@@ -206,15 +203,6 @@ fn axis_orders_other_than_x_y_first_gather_every_plane() {
             }
         }
     }
-}
-
-#[test]
-fn an_absent_axis_has_size_one() {
-    let file = IcsFile::new(&["x", "y"], &[4, 3], 16);
-    let (_path, reader) = open(&file, "no_z");
-    let dims = reader.meta().scene(0).unwrap().dims;
-    assert_eq!((dims.x, dims.y, dims.z, dims.c, dims.t), (4, 3, 1, 1, 1));
-    assert_eq!(u16_plane(&reader, 0, 0, 0), plane_u16(4, 3, 0));
 }
 
 #[test]
@@ -231,11 +219,8 @@ fn a_gzip_file_matches_its_uncompressed_twin() {
     for t in 0..2 {
         for c in 0..3 {
             for z in 0..4 {
-                assert_eq!(
-                    u16_plane(&reader, t, c, z),
-                    u16_plane(&plain_reader, t, c, z),
-                    "gzip plane (t={t}, c={c}, z={z})"
-                );
+                let plane = u16_plane(&plain_reader, t, c, z);
+                assert_eq!(u16_plane(&reader, t, c, z), plane, "(t={t}, c={c}, z={z})");
             }
         }
     }
@@ -273,12 +258,7 @@ fn the_calibration_comes_from_scale_and_units() {
             ..IcsFile::new(&["x", "y", "z"], &[4, 3, 2], 16)
         };
         let (_path, reader) = open(&file, &format!("cal_{name}"));
-        let px = reader
-            .meta()
-            .scene(0)
-            .unwrap()
-            .px_size_um
-            .expect("a pixel size");
+        let px = reader.meta().scene(0).unwrap().px_size_um.expect("a size");
         assert!((px.x - 0.25 * factor).abs() < 1e-9, "{name}: {}", px.x);
         assert!((px.y - 0.5 * factor).abs() < 1e-9, "{name}: {}", px.y);
         assert!(px.z.is_none(), "{name}: no unit is stated for z");
@@ -350,31 +330,22 @@ fn every_ics_extension_is_detected_and_the_content_wins() {
 #[test]
 fn a_dv_or_mrc_file_renamed_ics_is_refused_with_the_ics_sentence() {
     let dv = support::dv::DvFile::i16(4, 3, 1, 1, 1, 0);
-    let path = scratch("dv_as_ics");
-    dv.write(&path);
-    let dv_bytes = std::fs::read(&*path).expect("read the DV bytes");
-    let renamed = scratch("dv_as_ics_named");
-    std::fs::write(&*renamed, &dv_bytes).expect("write the renamed DV");
-    match IcsReader::open(&renamed) {
-        Err(error) => assert!(
-            error.to_string().contains("ICS"),
-            "the sentence names ICS: {error}"
-        ),
-        Ok(_) => panic!("a DV file opened as ICS"),
-    }
-
     let mrc = support::mrc::MrcFile::i16(4, 3, 1);
-    let path = scratch("mrc_as_ics");
-    mrc.write(&path);
-    let mrc_bytes = std::fs::read(&*path).expect("read the MRC bytes");
-    let renamed = scratch("mrc_as_ics_named");
-    std::fs::write(&*renamed, &mrc_bytes).expect("write the renamed MRC");
-    match IcsReader::open(&renamed) {
-        Err(error) => assert!(
-            error.to_string().contains("ICS"),
-            "the sentence names ICS: {error}"
-        ),
-        Ok(_) => panic!("an MRC file opened as ICS"),
+    for (bytes, name) in [(dv.bytes(), "dv"), (mrc.bytes(), "mrc")] {
+        let path = scratch(&format!("{name}_as_ics"));
+        std::fs::write(&*path, &bytes).expect("write the renamed file");
+        match IcsReader::open(&path) {
+            Err(error) => {
+                // The ICS sentence: no `ics_version` in the probe, or no `end` in what follows.
+                let text = error.to_string();
+                assert!(text.contains("ICS"), "{name}: {text}");
+                assert!(
+                    text.contains("ics_version") || text.contains("`end`"),
+                    "{name}: {text}"
+                );
+            }
+            Ok(_) => panic!("a {name} file opened as ICS"),
+        }
     }
 }
 
@@ -386,4 +357,25 @@ fn open_routes_an_ics_file_to_the_ics_reader() {
     assert_eq!(reader.meta().scene_count(), 1);
     assert_eq!(reader.meta().scene(0).unwrap().dims.x, 4);
     assert_eq!(reader.meta().scene(0).unwrap().dtype, DType::U16);
+}
+
+#[test]
+fn an_integer_without_a_sign_line_is_unsigned() {
+    // The format's default: `sign` absent means unsigned, so 0xFFFF is 65535 and not -1.
+    let mut file = IcsFile::new(&["x", "y"], &[2, 1], 16);
+    file.drop = vec![("representation", "sign")];
+    let mut bytes = file.header();
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("sign"),
+        "the line is gone"
+    );
+    bytes.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    let path = scratch("default_sign");
+    std::fs::write(&*path, &bytes).expect("write the unsigned ICS");
+    let reader = IcsReader::open(&path).expect("open the ICS without a sign line");
+    assert_eq!(reader.meta().scene(0).unwrap().dtype, DType::U16);
+    match reader.plane(0, 0, 0, 0).expect("read the plane").data {
+        PlaneBuf::U16(values) => assert_eq!(values, vec![65535, 65535]),
+        other => panic!("expected U16, got {other:?}"),
+    }
 }

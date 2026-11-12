@@ -23,10 +23,12 @@ impl IcsReader {
         if t >= dims.t || c >= dims.c || z >= dims.z {
             return Err(Error::OutOfRange { scene, t, c, z });
         }
+        // The ceiling before the first byte is reserved, on both paths: an over-ceiling plane never allocates.
+        let plane_bytes = self.layout.plane_bytes()?;
         let samples = self.plane_samples(t, c, z)?;
         let raw = match self.layout.compression() {
             Compression::None => self.mapped(samples)?,
-            Compression::Gzip => self.inflated(samples)?,
+            Compression::Gzip => self.inflated(samples, plane_bytes)?,
         };
         let data = PlaneBuf::from_bytes(self.layout.dtype, self.layout.endian, &raw)?;
         Plane::new(data, [dims.y, dims.x])
@@ -49,6 +51,7 @@ impl IcsReader {
             .get(origin..origin + span)
             .ok_or_else(|| Error::Decode(self.past_the_end(origin, span)))?;
         if self.layout.contiguous() {
+            // `plane_bytes` is the span of a contiguous plane, so this block is the whole plane.
             return Ok(block.to_vec());
         }
         self.gather(block)
@@ -87,8 +90,7 @@ impl IcsReader {
     }
 
     /// The plane's bytes, inflated from the start of the stream: the bytes before the plane are decoded and dropped.
-    fn inflated(&self, samples: usize) -> Result<Vec<u8>> {
-        let bytes = self.layout.plane_bytes()?;
+    fn inflated(&self, samples: usize, bytes: usize) -> Result<Vec<u8>> {
         let skip = samples
             .checked_mul(self.layout.dtype.size_bytes())
             .ok_or_else(|| Error::Decode("ICS plane offset overflows usize".to_string()))?;

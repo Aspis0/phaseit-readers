@@ -24,7 +24,7 @@ pub(super) struct Layout {
     axes: Vec<String>,
     /// Strides in samples, aligned with `axes`.
     strides: Vec<usize>,
-    /// x and y are the two fastest axes, so a plane is contiguous rows rather than gathered sample by sample.
+    /// x and y are the first two axes, so a plane is contiguous rows rather than gathered sample by sample.
     contiguous: bool,
 }
 
@@ -85,12 +85,14 @@ pub(super) fn layout(header: &IcsHeader, file_bytes: Option<usize>) -> Result<La
     let sizes = extents(header)?;
     let strides = strides(&sizes)?;
     let dims = dims_of(&header.axes, &sizes, dtype)?;
+    // `x y` first is the one order whose plane is its own file block; `y x` holds the same samples in one block
+    // but transposed, so it is gathered too, and any other order gathers samples that are not adjacent at all.
     let contiguous = header.axes.first().map(String::as_str) == Some("x")
         && header.axes.get(1).map(String::as_str) == Some("y");
     if compression == Compression::Gzip && !contiguous {
         return Err(Error::Unsupported(
-            "ICS gzip data whose plane is not contiguous (x and y are not the two fastest axes): serving a plane \
-             would mean inflating the whole stream to gather its samples"
+            "ICS gzip data whose two fastest axes are not x then y: serving a plane would mean inflating the whole \
+             stream to gather its samples"
                 .to_string(),
         ));
     }
@@ -202,7 +204,8 @@ fn dims_of(axes: &[String], sizes: &[usize], dtype: DType) -> Result<Dims5> {
         };
         *slot = *size;
     }
-    // Overflow only: a plane over the ceiling is published here and refused by `plane()`, one at a time.
+    // The byte count is checked for overflow only: the decode ceiling is applied when the plane is read, before a
+    // byte of it is reserved, because a file may hold many planes of a size well under it.
     dims.plane_bytes_no_ceiling(dtype)?;
     Ok(dims)
 }
