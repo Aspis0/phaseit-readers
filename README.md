@@ -1,6 +1,6 @@
 # phasit-imread
 
-Native, in-process, offline reader for proprietary microscopy image formats.
+Native, in-process, offline reader for microscopy image formats (proprietary and open).
 Decodes files to normalized `(T, C, Z, Y, X)` planes with no JVM, no Bio-Formats,
 no network. GPL-free (see `THIRD-PARTY-NOTICES.md`).
 
@@ -16,6 +16,7 @@ no network. GPL-free (see `THIRD-PARTY-NOTICES.md`).
 | MRC2014 | ⚠️ one scene; MODE 1, 2 and 6 only; ISPG 0, 1–230 or 401–630 |
 | DeltaVision | ⚠️ one scene; MODE 0, 1, 2 and 6 only; ImgSequence 0, 1 or 2; W ≤ 5 |
 | ICS/IDS | ⚠️ one scene; versions 1.0 and 2.0; uncompressed and gzip; U8, U16, I16 and F32 |
+| N5 | ⚠️ one scene; 2-D (x, y) and 3-D (x, y, z); raw, gzip and zstd; U8, U16, I16 and F32 |
 | OIB · OIF (Olympus) | detected, `NotImplemented` |
 
 ⚠️ means the format opens only part of what it can hold; the reader refuses the
@@ -126,6 +127,19 @@ rest rather than guess:
   UIC1 entry whose offset is outside the file is ignored. The UIC2 z distance is not published:
   what it measures varies between writers, and the MetaMorph `.nd` companion file is not read.
   `region` is the trait default.
+- **N5** (Saalfeld lab / BigDataViewer) — one scene: a dataset is a directory
+  holding `attributes.json` (or that file itself), and the block at `g0/g1/…` is
+  one directory per axis but the last, which names the file. A block the dataset
+  does not hold is N5's zero block, not an error. Dimension 0 is the fastest
+  axis; 2-D (x, y) and 3-D (x, y, z) datasets of uint8, uint16, int16 and
+  float32 are read, raw, gzip (the `compression` object or the legacy
+  `compressionType`) or zstd. A rank other than two or three (channels and time
+  points), another sample type, another compression (blosc, lz4, xz, bzip2), a
+  block mode other than 0, a block header whose rank, zero extent, extent past
+  the block size or extent past the dataset edge disagrees with the dataset, and
+  a payload that is not exactly its header's byte count (short or a bomb) are
+  refused. The pixel size comes from `pixelResolution` in µm or nm; any other
+  unit or shape is omitted, never guessed. `region` is the trait default.
 
 ## API
 
