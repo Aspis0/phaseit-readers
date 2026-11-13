@@ -13,6 +13,10 @@ pub const MAX_MMAP_BYTES: usize = 64 * 1024 * 1024 * 1024;
 /// [`MAX_DECODED_PLANE_BYTES`]; no scanner exceeds ~200k px per edge, so this bound catches crafted extents.
 pub const MAX_SCENE_DIM: usize = 1_000_000;
 
+/// Largest `attributes.json` an N5 reader reads (1 MiB): detection probes exactly this far, so a larger file
+/// is refused with the same sentence by both, never mistaken for another format.
+pub const MAX_ATTRIBUTES_BYTES: u64 = 1024 * 1024;
+
 /// Byte size of one plane, refused on overflow or above [`MAX_DECODED_PLANE_BYTES`]; call it BEFORE allocating.
 pub fn checked_plane_alloc(dims: &Dims5, dtype: DType) -> Result<usize> {
     dims.checked_plane_bytes(dtype)

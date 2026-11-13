@@ -9,6 +9,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::error::{Error, Result};
+use crate::guard::MAX_ATTRIBUTES_BYTES;
 use crate::types::ImageReader;
 
 /// Every format except OIB and OIF has a reader.
@@ -53,28 +54,36 @@ fn is_tiff_magic(h: &[u8]) -> bool {
 }
 
 /// An N5 dataset is a directory holding `attributes.json` with a `dimensions` key, or that file itself.
-fn is_n5(path: &Path) -> bool {
+fn is_n5(path: &Path) -> Result<bool> {
     let attributes = match path.is_dir() {
         true => path.join("attributes.json"),
         // The name is case-sensitive: another spelling of it is not a dataset's attributes.
         false if path.file_name() == Some(OsStr::new("attributes.json")) => path.to_path_buf(),
-        false => return false,
+        false => return Ok(false),
     };
     has_dimensions(&attributes)
 }
 
-/// An `attributes.json` head that holds any real one: a longer file is refused by the reader's own cap.
-const ATTRIBUTES_PROBE_LEN: usize = 4096;
-
-/// The head of an `attributes.json` holds a `dimensions` member: a probe of the bytes, never a parse of a dataset.
-fn has_dimensions(attributes: &Path) -> bool {
-    let mut head = [0u8; ATTRIBUTES_PROBE_LEN];
-    let read = File::open(attributes)
-        .and_then(|mut file| file.read(&mut head))
+/// An `attributes.json` is probed exactly as far as the reader itself reads it: a file past the cap is refused
+/// here as `N5Reader::open` refuses it, never mistaken for another format.
+fn has_dimensions(attributes: &Path) -> Result<bool> {
+    let Ok(mut file) = File::open(attributes) else {
+        return Ok(false);
+    };
+    let mut head = Vec::new();
+    let read = file
+        .take(MAX_ATTRIBUTES_BYTES + 1)
+        .read_to_end(&mut head)
         .unwrap_or(0);
-    serde_json::from_slice::<serde_json::Value>(&head[..read])
+    if read > MAX_ATTRIBUTES_BYTES as usize {
+        return Err(Error::OversizedAllocation {
+            requested: read,
+            cap: MAX_ATTRIBUTES_BYTES as usize,
+        });
+    }
+    Ok(serde_json::from_slice::<serde_json::Value>(&head)
         .ok()
-        .is_some_and(|json| json.get("dimensions").is_some())
+        .is_some_and(|json| json.get("dimensions").is_some()))
 }
 
 /// A name with no `.` yields `""`, so a file named `lif` has no extension.
@@ -148,7 +157,7 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
 /// The format of one file: [`detect_from`] plus the one fact the probe cannot reach. This and [`open`] decide the
 /// format, so a caller that names a reader from `detect_format` never reads an STK as a one-plane TIFF.
 pub fn detect_format(path: &Path) -> Result<Format> {
-    if is_n5(path) {
+    if is_n5(path)? {
         return Ok(Format::N5);
     }
     let mut file = File::open(path)?;
@@ -360,7 +369,7 @@ mod tests {
             std::fs::write(folder.join(name), text).unwrap();
             let path = folder.join(name);
             assert_eq!(
-                is_n5(&path),
+                is_n5(&path).unwrap(),
                 *is_dataset,
                 "{}: expected {is_dataset}",
                 path.display()
@@ -369,7 +378,7 @@ mod tests {
                 // A case-insensitive file system opens another spelling too; the directory probe is asked only of
                 // the name the format states.
                 assert_eq!(
-                    is_n5(&folder),
+                    is_n5(&folder).unwrap(),
                     *is_dataset,
                     "{}: by directory",
                     path.display()
@@ -392,7 +401,7 @@ mod tests {
         let empty = scratch.join("empty");
         std::fs::create_dir_all(&empty).unwrap();
         assert!(
-            !is_n5(&empty),
+            !is_n5(&empty).unwrap(),
             "a directory without attributes.json is no dataset"
         );
         let _ = std::fs::remove_dir_all(&scratch);

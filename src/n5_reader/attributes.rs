@@ -9,11 +9,8 @@ use serde_json::{Map, Value};
 
 use crate::calibration::Calibration;
 use crate::error::{Error, Result};
-use crate::guard::MAX_SCENE_DIM;
+use crate::guard::{MAX_ATTRIBUTES_BYTES, MAX_SCENE_DIM};
 use crate::types::DType;
-
-/// An `attributes.json` above this holds no dataset: a corrupt or hostile file is not read whole.
-const MAX_ATTRIBUTES_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 pub(super) struct Attributes {
