@@ -24,9 +24,12 @@ fn open_refusal(dataset: &N5Dataset) -> String {
 fn plane_refusal(dataset: &N5Dataset) -> String {
     let reader = N5Reader::open(dataset).expect("the dataset opens");
     match reader.plane(0, 0, 0, 0) {
-        Err(Error::Unsupported(message))
-        | Err(Error::Parse(message))
-        | Err(Error::Decode(message)) => message,
+        Err(
+            error @ (Error::Unsupported(_)
+            | Error::Parse(_)
+            | Error::Decode(_)
+            | Error::OversizedAllocation { .. }),
+        ) => error.to_string(),
         Err(other) => panic!("expected a refusal, got {other:?}"),
         Ok(_) => panic!("the plane decoded"),
     }
@@ -313,14 +316,21 @@ fn a_block_header_shorter_than_its_own_rank_is_refused() {
 
 #[test]
 fn a_raw_payload_that_is_not_the_blocks_own_size_is_refused() {
-    // A raw block of 2x1 u8 holds 2 bytes: none, one too few and one too many are all refused.
+    // A raw block of 2x1 u8 holds 2 bytes: none, one too few and one too many are all refused. One too many
+    // also makes the file longer than its payload can need, so the cap refuses it before it is read.
     let dataset = dataset("payload", "raw");
-    for payload in [&[][..], &[1][..], &[1, 2, 3][..]] {
+    for payload in [&[][..], &[1][..]] {
         dataset.write_raw(&[0, 0, 0], &[2, 1, 1], payload);
         let message = plane_refusal(&dataset);
         assert!(message.contains("not the 2"), "{payload:?}: {message}");
         assert!(message.contains("raw"), "{payload:?}: {message}");
     }
+    dataset.write_raw(&[0, 0, 0], &[2, 1, 1], &[1, 2, 3]);
+    let message = plane_refusal(&dataset);
+    assert!(
+        message.contains("requested 19 bytes, cap 18 bytes"),
+        "{message}"
+    );
 }
 
 #[test]

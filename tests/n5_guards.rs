@@ -55,3 +55,51 @@ fn a_large_but_valid_attributes_json_is_detected_and_opens() {
         Err(Error::OversizedAllocation { .. })
     ));
 }
+
+/// The block at the first grid position holds `header` and nothing else, with the file extended to `length`
+/// bytes (a sparse file: the bytes were never written, the length still claims them).
+fn sparse_block(name: &str, header: Vec<u8>, length: u64) -> N5Dataset {
+    let dataset = N5Dataset::new(name, &[4, 3, 2], &[2, 2, 1], DType::U8, Some("raw"));
+    dataset.write_bytes(&[0, 0, 0], &header);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(dataset.block_path(&[0, 0, 0]))
+        .expect("open the block file");
+    file.set_len(length).expect("extend the block file");
+    dataset
+}
+
+#[test]
+fn a_block_file_past_its_payload_is_refused_after_its_header_not_after_the_gigabyte() {
+    // The header alone decides whether the rest of the file is worth reading, so a block file that claims a
+    // gigabyte is refused in well under a second, whether its header is valid or not.
+    let mut bad = vec![1u16, 3u16]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect::<Vec<u8>>();
+    bad.extend([2u32, 2, 1].iter().flat_map(|v| v.to_be_bytes()));
+    let valid = [0u16, 3u16]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .chain([2u32, 2, 1].iter().flat_map(|v| v.to_be_bytes()))
+        .collect();
+    for (name, header, sentence) in [
+        ("guards_sparse_bad", bad, "mode is 1"),
+        (
+            "guards_sparse_valid",
+            valid,
+            "requested 1073741824 bytes, cap 20 bytes",
+        ),
+    ] {
+        let dataset = sparse_block(name, header, 1 << 30);
+        let start = std::time::Instant::now();
+        let message = plane_refusal(&dataset);
+        let elapsed = start.elapsed();
+        eprintln!("{name}: refused in {elapsed:?}: {message}");
+        assert!(
+            elapsed < std::time::Duration::from_secs(1),
+            "{name}: {elapsed:?}"
+        );
+        assert!(message.contains(sentence), "{name}: {message}");
+    }
+}

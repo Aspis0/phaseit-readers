@@ -64,7 +64,8 @@ impl Block {
     }
 }
 
-/// The block file at `path` read whole, its header checked and its payload inflated.
+/// The block file at `path`: the fixed-size header is read alone and checked, then at most the stored bytes
+/// the header and the compression allow are read, then the payload is inflated to exactly what it promises.
 pub(super) fn read(
     path: &Path,
     block_size: &[usize],
@@ -73,10 +74,33 @@ pub(super) fn read(
     compression: Compression,
 ) -> Result<Block> {
     let mut file = File::open(path)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    let header = header(&bytes, block_size, edge)?;
-    decode(&header, &bytes[header.len..], compression, dtype)
+    let header_len = 4 + 4 * block_size.len();
+    let mut head = Vec::new();
+    file.by_ref()
+        .take(header_len as u64)
+        .read_to_end(&mut head)?;
+    let header = header(&head, block_size, edge)?;
+    let expected = priced(&header.size, dtype.size_bytes())?;
+    let cap = stored_cap(compression, expected);
+    let len = file.metadata()?.len();
+    if len > header_len as u64 + cap as u64 {
+        return Err(Error::OversizedAllocation {
+            requested: usize::try_from(len).unwrap_or(usize::MAX),
+            cap: header_len + cap,
+        });
+    }
+    let mut stored = Vec::new();
+    file.by_ref().take(cap as u64).read_to_end(&mut stored)?;
+    decode(&header, &stored, compression, dtype)
+}
+
+/// The stored bytes a block file may hold: raw is exactly the payload; a compressed stream of it runs a few
+/// bytes longer, and 64 KiB of slack covers that without buffering a file past its own payload.
+fn stored_cap(compression: Compression, expected: usize) -> usize {
+    match compression {
+        Compression::None => expected,
+        _ => expected.saturating_add(64 * 1024),
+    }
 }
 
 fn header(bytes: &[u8], block_size: &[usize], edge: &[usize]) -> Result<BlockHeader> {
