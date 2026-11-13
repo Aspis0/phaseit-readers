@@ -183,7 +183,7 @@ impl StkFile {
             strip(TAG_STRIP_BYTE_COUNTS, counts, counts_at),
             short(TAG_SAMPLE_FORMAT, self.sample_format),
         ];
-        if let Some(pairs) = &self.uic1 {
+        if self.uic1.is_some() {
             entries.push((UIC1, TYPE_LONG, self.uic1_pairs() as u32, places.uic1_pairs));
         }
         let uic2_kind = match self.uic2_type {

@@ -148,7 +148,7 @@ fn a_byte_order_that_is_not_a_classic_tiff_is_refused() {
 #[test]
 fn uic2_states_its_plane_count() {
     let entry = Entry { count: 3, at: 8 };
-    assert_eq!(plane_count(&vec![0u8; 8 + 24 * 3], &entry).unwrap(), 3);
+    assert_eq!(plane_count(&[0u8; 8 + 24 * 3], &entry).unwrap(), 3);
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn uic2_value_past_the_end_of_the_file_is_refused() {
 fn one_plane_still_needs_its_own_record() {
     // The record is six uint32 whatever the field type: a 4-byte value in the entry is not one.
     let entry = Entry { count: 1, at: 8 };
-    assert_eq!(plane_count(&vec![0u8; 8 + 24], &entry).unwrap(), 1);
+    assert_eq!(plane_count(&[0u8; 8 + 24], &entry).unwrap(), 1);
     assert!(matches!(
         plane_count(&[0u8; 24], &entry),
         Err(Error::Parse(message)) if message.contains("records")
