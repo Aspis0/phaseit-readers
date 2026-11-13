@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Magic-byte probe (first 16 bytes) plus extension; the pure logic is in [`detect_from`], so tests need no disk.
+//! N5 is the exception: a dataset is a directory (or its `attributes.json`), which has no magic, so the file
+//! system recognises it before the probe; every other format is probed exactly as before.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
 use crate::error::{Error, Result};
+use crate::guard::MAX_ATTRIBUTES_BYTES;
 use crate::types::ImageReader;
 
 /// Every format except OIB and OIF has a reader.
@@ -28,6 +32,8 @@ pub enum Format {
     Ics,
     /// MetaMorph STK: a classic TIFF whose first IFD carries the private UIC2 plane table.
     Stk,
+    /// N5 (Saalfeld lab / BigDataViewer): a directory holding `attributes.json`; no magic, the layout detects it.
+    N5,
     Oib,
     /// Olympus OIF (text master file referencing external data).
     Oif,
@@ -45,6 +51,39 @@ fn is_tiff_magic(h: &[u8]) -> bool {
         || h.starts_with(b"MM\x00\x2A")
         || h.starts_with(b"II\x2B\x00")
         || h.starts_with(b"MM\x00\x2B")
+}
+
+/// An N5 dataset is a directory holding `attributes.json` with a `dimensions` key, or that file itself.
+fn is_n5(path: &Path) -> Result<bool> {
+    let attributes = match path.is_dir() {
+        true => path.join("attributes.json"),
+        // The name is case-sensitive: another spelling of it is not a dataset's attributes.
+        false if path.file_name() == Some(OsStr::new("attributes.json")) => path.to_path_buf(),
+        false => return Ok(false),
+    };
+    has_dimensions(&attributes)
+}
+
+/// An `attributes.json` is probed exactly as far as the reader itself reads it: a file past the cap is refused
+/// here as `N5Reader::open` refuses it, never mistaken for another format.
+fn has_dimensions(attributes: &Path) -> Result<bool> {
+    let Ok(file) = File::open(attributes) else {
+        return Ok(false);
+    };
+    let mut head = Vec::new();
+    let read = file
+        .take(MAX_ATTRIBUTES_BYTES + 1)
+        .read_to_end(&mut head)
+        .unwrap_or(0);
+    if read > MAX_ATTRIBUTES_BYTES as usize {
+        return Err(Error::OversizedAllocation {
+            requested: read,
+            cap: MAX_ATTRIBUTES_BYTES as usize,
+        });
+    }
+    Ok(serde_json::from_slice::<serde_json::Value>(&head)
+        .ok()
+        .is_some_and(|json| json.get("dimensions").is_some()))
 }
 
 /// A name with no `.` yields `""`, so a file named `lif` has no extension.
@@ -118,6 +157,9 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
 /// The format of one file: [`detect_from`] plus the one fact the probe cannot reach. This and [`open`] decide the
 /// format, so a caller that names a reader from `detect_format` never reads an STK as a one-plane TIFF.
 pub fn detect_format(path: &Path) -> Result<Format> {
+    if is_n5(path)? {
+        return Ok(Format::N5);
+    }
     let mut file = File::open(path)?;
     let mut buf = [0u8; HEADER_PROBE_LEN];
     let n = file.read(&mut buf)?;
@@ -142,6 +184,7 @@ pub fn open(path: &Path) -> Result<Box<dyn ImageReader>> {
         Format::Mrc => Ok(Box::new(crate::mrc_reader::MrcReader::open(path)?)),
         Format::Dv => Ok(Box::new(crate::dv_reader::DvReader::open(path)?)),
         Format::Ics => Ok(Box::new(crate::ics_reader::IcsReader::open(path)?)),
+        Format::N5 => Ok(Box::new(crate::n5_reader::N5Reader::open(path)?)),
         Format::Oib => Err(Error::NotImplemented(fmt)),
         Format::Oif => Err(Error::NotImplemented(fmt)),
     }
@@ -292,6 +335,76 @@ mod tests {
             detect_from(b"[Version Info]", Some("a.oif")).unwrap(),
             Format::Oif
         );
+    }
+
+    #[test]
+    fn a_directory_of_attributes_is_an_n5_dataset_and_nothing_else_is() {
+        // A dataset is recognised by the `dimensions` member of its `attributes.json`, so nothing else is one.
+        let scratch = std::env::temp_dir().join(format!("phasit_n5_detect_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let cases = [
+            (
+                "attributes.json",
+                r#"{"dimensions":[4,3],"blockSize":[2,2],"dataType":"uint8"}"#,
+                true,
+            ),
+            (
+                "attributes.json",
+                "\n{ \"dimensions\": [4, 3], \"blockSize\": [2, 2] }",
+                true,
+            ),
+            ("Attributes.json", r#"{"dimensions":[4,3]}"#, false),
+            ("attributes.json.bak", r#"{"dimensions":[4,3]}"#, false),
+            (
+                "attributes.json",
+                r#"{"pixelResolution":{"dimensions":[1,1]}}"#,
+                false,
+            ),
+            ("attributes.json", "", false),
+        ];
+        for (index, (name, text, is_dataset)) in cases.iter().enumerate() {
+            // One folder per case: a case-insensitive file system would open the previous case's file.
+            let folder = scratch.join(index.to_string());
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join(name), text).unwrap();
+            let path = folder.join(name);
+            assert_eq!(
+                is_n5(&path).unwrap(),
+                *is_dataset,
+                "{}: expected {is_dataset}",
+                path.display()
+            );
+            if *name == "attributes.json" {
+                // A case-insensitive file system opens another spelling too; the directory probe is asked only of
+                // the name the format states.
+                assert_eq!(
+                    is_n5(&folder).unwrap(),
+                    *is_dataset,
+                    "{}: by directory",
+                    path.display()
+                );
+            }
+            assert_eq!(
+                detect_format(&path).ok().is_some_and(|f| f == Format::N5),
+                *is_dataset,
+                "{}",
+                path.display()
+            );
+            if *is_dataset {
+                assert!(
+                    detect_format(&folder).ok().is_some_and(|f| f == Format::N5),
+                    "{}",
+                    folder.display()
+                );
+            }
+        }
+        let empty = scratch.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(
+            !is_n5(&empty).unwrap(),
+            "a directory without attributes.json is no dataset"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     #[test]

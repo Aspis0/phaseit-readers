@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Writes the small TIFF files the reader tests read back: each page is a flat colour, so a value identifies its IFD.
+//! Writes the small image files the reader tests read back, one module per format.
 
 // Each test crate includes this module and uses only some of its writers.
 #![allow(dead_code)]
@@ -10,6 +10,7 @@ pub mod ics;
 pub mod lif;
 pub mod lsm;
 pub mod mrc;
+pub mod n5;
 pub mod dv;
 pub mod nd2;
 pub mod scratch;

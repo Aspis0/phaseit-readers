@@ -13,6 +13,10 @@ pub const MAX_MMAP_BYTES: usize = 64 * 1024 * 1024 * 1024;
 /// [`MAX_DECODED_PLANE_BYTES`]; no scanner exceeds ~200k px per edge, so this bound catches crafted extents.
 pub const MAX_SCENE_DIM: usize = 1_000_000;
 
+/// Largest `attributes.json` an N5 reader reads (1 MiB): detection probes exactly this far, so a larger file
+/// is refused with the same sentence by both, never mistaken for another format.
+pub const MAX_ATTRIBUTES_BYTES: u64 = 1024 * 1024;
+
 /// Byte size of one plane, refused on overflow or above [`MAX_DECODED_PLANE_BYTES`]; call it BEFORE allocating.
 pub fn checked_plane_alloc(dims: &Dims5, dtype: DType) -> Result<usize> {
     dims.checked_plane_bytes(dtype)
@@ -25,7 +29,13 @@ mod tests {
 
     #[test]
     fn normal_plane_passes() {
-        let dims = Dims5 { t: 1, c: 1, z: 1, y: 2048, x: 2048 };
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 2048,
+            x: 2048,
+        };
         let bytes = checked_plane_alloc(&dims, DType::U16).unwrap();
         assert_eq!(bytes, 2048 * 2048 * 2);
         assert!(bytes <= MAX_DECODED_PLANE_BYTES);
@@ -33,7 +43,13 @@ mod tests {
 
     #[test]
     fn oversized_plane_refused() {
-        let dims = Dims5 { t: 1, c: 1, z: 1, y: 100_000, x: 100_000 };
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 100_000,
+            x: 100_000,
+        };
         match checked_plane_alloc(&dims, DType::F32) {
             Err(Error::OversizedAllocation { requested, cap }) => {
                 assert_eq!(cap, MAX_DECODED_PLANE_BYTES);
@@ -45,7 +61,13 @@ mod tests {
 
     #[test]
     fn overflow_does_not_panic() {
-        let dims = Dims5 { t: 1, c: 1, z: 1, y: usize::MAX, x: 2 };
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: usize::MAX,
+            x: 2,
+        };
         match checked_plane_alloc(&dims, DType::U8) {
             Err(Error::OversizedAllocation { requested, cap }) => {
                 assert_eq!(requested, usize::MAX);

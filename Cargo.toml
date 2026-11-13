@@ -6,7 +6,7 @@ edition = "2021"
 # uses, and no dependency of its graph declares a higher one - the highest is
 # `ruzstd 0.9.1` at 1.87, in the runtime graph.
 rust-version = "1.88"
-description = "Native Rust reader for proprietary microscopy image formats (TIFF/OME-TIFF, LSM, LIF, CZI, ND2, MRC2014, DeltaVision, ICS/IDS, MetaMorph STK) — offline, in-process."
+description = "Native Rust reader for microscopy image formats (TIFF/OME-TIFF, LSM, LIF, CZI, ND2, MRC2014, DeltaVision, ICS/IDS, MetaMorph STK, N5) — offline, in-process."
 license = "Apache-2.0"   # see LICENSE and NOTICE in this crate
 authors = ["Eclose"]
 repository = "https://github.com/Aspis0/phaseit-readers"
@@ -20,6 +20,7 @@ memmap2 = "0.9"
 byteorder = "1"
 thiserror = "2"
 ruzstd = "0.9"       # pure-Rust zstd decoder (MIT); CZI Zstd0/Zstd1 subblocks. NO C `zstd` crate.
+serde_json = "1"     # N5 `attributes.json` (MIT/Apache-2.0); already a dev-dependency, now a normal one.
 flate2 = "1"         # zlib inflate for ND2 CLxLiteVariant COMPRESS metadata; pure-Rust miniz_oxide backend (default), NO C zlib-sys.
 ndarray = { version = "0.17", optional = true }   # OPTIONAL (feature-gated)
 
@@ -27,7 +28,7 @@ ndarray = { version = "0.17", optional = true }   # OPTIONAL (feature-gated)
 # dev-only, for the parity tests. `default-features = false` drops ndarray-npy's
 # .npz reader - the only edge that pulled `zip` (and its advisories) into the graph.
 ndarray-npy = { version = "0.10", default-features = false }
-serde_json = "1"        # dev-only: parse the ND2 and CZI parity manifests
+serde_json = "1"        # also a runtime dependency (N5 attributes); the ND2 and CZI parity manifests parse with it
 
 [build-dependencies]
 # Only used when the `jpegxr` feature is on (compiles vendored jxrlib).
