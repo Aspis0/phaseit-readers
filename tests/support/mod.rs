@@ -13,6 +13,7 @@ pub mod mrc;
 pub mod dv;
 pub mod nd2;
 pub mod scratch;
+pub mod stk;
 pub mod tiff_layout;
 pub mod tiff_page;
 pub mod tiff_striped;

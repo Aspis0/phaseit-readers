@@ -25,6 +25,8 @@ pub enum Format {
     Dv,
     /// ICS/IDS (Image Cytometry Standard); `ics_version` sits at byte 2, so content detects it.
     Ics,
+    /// MetaMorph STK: a classic TIFF whose first IFD carries the private UIC2 plane table.
+    Stk,
     Oib,
     /// Olympus OIF (text master file referencing external data).
     Oif,
@@ -83,6 +85,10 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
         if ext == "lsm" {
             return Ok(Format::Lsm);
         }
+        // The `.stk` name is enough: the reader refuses a TIFF without UIC2 with the STK sentence.
+        if ext == "stk" {
+            return Ok(Format::Stk);
+        }
         if is_ome {
             return Ok(Format::OmeTiff);
         }
@@ -98,6 +104,7 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
         "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" => Ok(Format::Mrc),
         "dv" | "r3d" => Ok(Format::Dv),
         "ics" | "ids" => Ok(Format::Ics),
+        "stk" => Ok(Format::Stk),
         "tif" | "tiff" if is_ome => Ok(Format::OmeTiff),
         "tif" | "tiff" => Ok(Format::Tiff),
         other => Err(Error::Unsupported(format!(
@@ -117,8 +124,13 @@ pub fn detect_format(path: &Path) -> Result<Format> {
 /// OIB and OIF are detected but have no reader: they return [`Error::NotImplemented`].
 pub fn open(path: &Path) -> Result<Box<dyn ImageReader>> {
     let fmt = detect_format(path)?;
+    // The 16-byte probe cannot see the first IFD, so a TIFF is opened as an STK only when its own UIC2 says so.
+    if fmt == Format::Tiff && crate::stk_reader::carries_uic2(path)? {
+        return Ok(Box::new(crate::stk_reader::StkReader::open(path)?));
+    }
     match fmt {
         Format::Tiff => Ok(Box::new(crate::tiff_reader::TiffReader::open(path)?)),
+        Format::Stk => Ok(Box::new(crate::stk_reader::StkReader::open(path)?)),
         Format::OmeTiff => Ok(Box::new(crate::tiff_reader::TiffReader::open(path)?)),
         Format::Lsm => Ok(Box::new(crate::lsm_reader::LsmReader::open(path)?)),
         Format::Lif => Ok(Box::new(crate::lif_reader::LifReader::open(path)?)),
@@ -236,6 +248,22 @@ mod tests {
             detect_from(b"\t\nics_versio\t2.0\n", Some("a.dat")),
             Err(Error::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn stk_by_extension_and_tiff_magic() {
+        assert_eq!(detect_from(b"", Some("stack.stk")).unwrap(), Format::Stk);
+        assert_eq!(detect_from(b"", Some("stack.STK")).unwrap(), Format::Stk);
+        assert_eq!(
+            detect_from(b"II\x2A\x00", Some("stack.stk")).unwrap(),
+            Format::Stk
+        );
+        // The UIC2 that names an STK is in the first IFD, which the 16-byte probe does not reach: a .tif stays a TIFF
+        // here and is routed to the STK reader by `open`.
+        assert_eq!(
+            detect_from(b"II\x2A\x00", Some("stack.tif")).unwrap(),
+            Format::Tiff
+        );
     }
 
     #[test]
