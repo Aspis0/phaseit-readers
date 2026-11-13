@@ -308,4 +308,3 @@ fn guard_planes(stages: usize, waves: usize, times: usize, z_steps: usize) -> Re
         ))),
     }
 }
-

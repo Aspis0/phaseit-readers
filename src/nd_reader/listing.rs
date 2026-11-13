@@ -17,8 +17,7 @@ pub(super) struct Listing {
 }
 
 impl Listing {
-    /// The files of `directory`; a subdirectory is not an image file. Two files whose names differ in case alone
-    /// are refused: the dataset names one of them, and the other would shadow it.
+    /// The files of `directory`; a subdirectory is not an image file.
     pub(super) fn read(directory: &Path, cap: usize) -> Result<Listing> {
         let mut files = HashMap::new();
         for entry in std::fs::read_dir(directory)? {
@@ -34,14 +33,7 @@ impl Listing {
                     "MetaMorph .nd: the dataset directory holds more than {cap} files, so its listing is not read"
                 )));
             }
-            let folded = name.to_ascii_lowercase();
-            if let Some(shadow) = files.insert(folded, path.clone()) {
-                return Err(Error::Unsupported(format!(
-                    "MetaMorph .nd: the dataset directory holds two files whose names differ in case alone: \
-                     {:?} and {name:?}",
-                    shadow.file_name().unwrap_or_default()
-                )));
-            }
+            insert(&mut files, name, &path)?;
         }
         Ok(Listing { files })
     }
@@ -52,4 +44,17 @@ impl Listing {
             .get(&name.to_ascii_lowercase())
             .map(PathBuf::as_path)
     }
+}
+
+/// One file of the listing: its name is folded into the map, and two names that fold to one key are refused,
+/// because the dataset names one of them and the other would shadow it.
+fn insert(files: &mut HashMap<String, PathBuf>, name: &str, path: &Path) -> Result<()> {
+    if let Some(shadow) = files.insert(name.to_ascii_lowercase(), path.to_path_buf()) {
+        return Err(Error::Unsupported(format!(
+            "MetaMorph .nd: the dataset directory holds two files whose names differ in case alone: {:?} and \
+             {name:?}",
+            shadow.file_name().unwrap_or_default()
+        )));
+    }
+    Ok(())
 }

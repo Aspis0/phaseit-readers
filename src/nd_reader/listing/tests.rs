@@ -2,7 +2,8 @@
 //! The dataset directory's listing: a file is found by its name whatever the case it is spelled in, and two names
 //! that differ in case alone are refused.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use super::*;
 
@@ -43,6 +44,18 @@ fn a_folder_of_more_files_than_its_cap_is_refused() {
         Ok(_) => panic!("a folder past its cap is refused"),
     };
     assert!(error.to_string().contains("more than 2 files"), "{error}");
+}
+
+#[test]
+fn two_names_that_differ_in_case_alone_are_refused() {
+    // The names are compared folded, so the refusal holds on a case-sensitive file system too.
+    let mut files = HashMap::new();
+    insert(&mut files, "Acq.TIF", Path::new("Acq.TIF")).expect("the first name");
+    let error = match insert(&mut files, "acq.tif", Path::new("acq.tif")) {
+        Err(error) => error,
+        Ok(()) => panic!("two names of one file are refused"),
+    };
+    assert!(error.to_string().contains("case alone"), "{error}");
 }
 
 #[test]
