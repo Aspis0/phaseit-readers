@@ -200,7 +200,6 @@ mod tests {
     fn block(shape: [usize; 2], value: u16) -> Block {
         let header = BlockHeader {
             size: vec![shape[1], shape[0]],
-            len: 12,
         };
         let mut bytes = Vec::new();
         for _ in 0..shape[0] * shape[1] {
@@ -275,7 +274,6 @@ mod tests {
     fn volume(shape: [usize; 2], planes: usize, value: impl Fn(usize) -> u16) -> Block {
         let header = BlockHeader {
             size: vec![shape[1], shape[0], planes],
-            len: 16,
         };
         let mut bytes = Vec::new();
         for z in 0..planes {

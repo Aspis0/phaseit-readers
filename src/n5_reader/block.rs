@@ -20,8 +20,6 @@ use super::attributes::Compression;
 pub(super) struct BlockHeader {
     /// This block's extent per axis, dimension 0 fastest; never above the dataset's block size nor past its edge.
     pub size: Vec<usize>,
-    /// The big-endian length of the header that states these extents.
-    pub len: usize,
 }
 
 /// A decoded block: its own `[x, y, z]` extent and its samples as big-endian bytes, dimension 0 fastest.
@@ -133,10 +131,7 @@ fn header(bytes: &[u8], block_size: &[usize], edge: &[usize]) -> Result<BlockHea
             edge,
         )?);
     }
-    Ok(BlockHeader {
-        size,
-        len: 4 + 4 * ndim as usize,
-    })
+    Ok(BlockHeader { size })
 }
 
 /// A block's extent along one axis: positive, no larger than the dataset's block size and inside the dataset edge.
@@ -254,7 +249,6 @@ mod tests {
     fn a_header_reads_its_extents_big_endian() {
         // Byte order: read little-endian, the same bytes would be 50331648 and 33554432.
         assert_eq!(block_header(&[3, 2]).size, vec![3, 2]);
-        assert_eq!(block_header(&[3, 2]).len, 12);
         assert_eq!(
             block_header(&[3, 1]).size,
             vec![3, 1],
@@ -290,23 +284,18 @@ mod tests {
 
     /// The samples 1..=6 as big-endian u16, stored the three ways.
     fn stored(compression: Compression) -> Vec<u8> {
-        let raw: Vec<u8> = [1u16, 2, 3, 4, 5, 6]
-            .iter()
-            .flat_map(|v| v.to_be_bytes())
-            .collect();
+        let raw: Vec<u8> = [1u16, 2, 3, 4, 5, 6].iter().flat_map(|v| v.to_be_bytes()).collect();
         match compression {
             Compression::None => raw,
             Compression::Gzip => {
                 use flate2::write::GzEncoder;
                 use std::io::Write;
                 let mut out = Vec::new();
-                GzEncoder::new(&mut out, flate2::Compression::default())
-                    .write_all(&raw)
-                    .unwrap();
+                GzEncoder::new(&mut out, flate2::Compression::default()).write_all(&raw).unwrap();
                 out
             }
             Compression::Zstd => ruzstd::encoding::compress_to_vec(
-                &raw[..],
+                &raw,
                 ruzstd::encoding::CompressionLevel::Fastest,
             ),
         }
@@ -341,10 +330,7 @@ mod tests {
     #[test]
     fn a_block_of_two_planes_holds_the_second_after_the_first() {
         // A 3-D block's samples run plane after plane: row (1, 0) is the first row of the second plane.
-        let header = BlockHeader {
-            size: vec![3, 2, 2],
-            len: 16,
-        };
+        let header = BlockHeader { size: vec![3, 2, 2] };
         let raw: Vec<u8> = (1u16..=12).flat_map(|v| v.to_be_bytes()).collect();
         let decoded = decode(&header, &raw, Compression::None, DType::U16).unwrap();
         assert_eq!(decoded.shape(), [3, 2, 2]);
@@ -363,9 +349,7 @@ mod tests {
         let raw = [1, 0, 2, 0, 3, 0];
         let long = [1, 0, 2, 0, 3, 0, 4, 0];
         for (payload, name) in [(&raw[..5], "short"), (&long[..], "long")] {
-            let error = decode(&header, payload, Compression::None, DType::U16)
-                .err()
-                .expect(name);
+            let error = decode(&header, payload, Compression::None, DType::U16).err().expect(name);
             assert!(
                 matches!(error, Error::Decode(ref message) if message.contains("not the 6")),
                 "{name}: {error}"
@@ -373,14 +357,9 @@ mod tests {
         }
         for compression in [Compression::Gzip, Compression::Zstd] {
             let payload = stored(compression);
-            let error = decode(
-                &header,
-                &payload[..payload.len() - 1],
-                compression,
-                DType::U16,
-            )
-            .err()
-            .expect("cut");
+            let error = decode(&header, &payload[..payload.len() - 1], compression, DType::U16)
+                .err()
+                .expect("cut");
             assert!(
                 matches!(error, Error::Decode(_)),
                 "{}: {error}",
