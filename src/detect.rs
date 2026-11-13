@@ -12,6 +12,7 @@ use crate::types::ImageReader;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Format {
+    /// A classic TIFF: [`detect_format`] and [`open`] call it an STK when its first IFD carries UIC2.
     Tiff,
     /// Routed to the TIFF reader, which confirms OME-ness by scanning the description.
     OmeTiff,
@@ -59,6 +60,8 @@ fn is_lif_magic(h: &[u8]) -> bool {
 
 /// Content magic wins; the extension is the fallback. OME-TIFF is recognized by its compound
 /// `.ome.tif[f]` suffix, which one trailing extension cannot express.
+/// The 16-byte probe cannot see the first IFD, so [`Format::Tiff`] here is refined to [`Format::Stk`] by
+/// [`detect_format`] and [`open`], the two that can read it.
 pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
     let name_l = name.map(|n| n.to_ascii_lowercase());
     let name_ref = name_l.as_deref();
@@ -113,21 +116,22 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
     }
 }
 
+/// The format of one file: [`detect_from`] plus the one fact the probe cannot reach. This and [`open`] decide the
+/// format, so a caller that names a reader from `detect_format` never reads an STK as a one-plane TIFF.
 pub fn detect_format(path: &Path) -> Result<Format> {
     let mut file = File::open(path)?;
     let mut buf = [0u8; HEADER_PROBE_LEN];
     let n = file.read(&mut buf)?;
     let name = path.file_name().and_then(|s| s.to_str());
-    detect_from(&buf[..n], name)
+    match detect_from(&buf[..n], name)? {
+        Format::Tiff if crate::stk_reader::carries_uic2(path)? => Ok(Format::Stk),
+        format => Ok(format),
+    }
 }
 
 /// OIB and OIF are detected but have no reader: they return [`Error::NotImplemented`].
 pub fn open(path: &Path) -> Result<Box<dyn ImageReader>> {
     let fmt = detect_format(path)?;
-    // The 16-byte probe cannot see the first IFD, so a TIFF is opened as an STK only when its own UIC2 says so.
-    if fmt == Format::Tiff && crate::stk_reader::carries_uic2(path)? {
-        return Ok(Box::new(crate::stk_reader::StkReader::open(path)?));
-    }
     match fmt {
         Format::Tiff => Ok(Box::new(crate::tiff_reader::TiffReader::open(path)?)),
         Format::Stk => Ok(Box::new(crate::stk_reader::StkReader::open(path)?)),

@@ -349,3 +349,84 @@ fn a_uic1_table_that_repeats_one_long_unit_name_opens_at_once() {
         "the open took {elapsed:?}"
     );
 }
+
+/// A one-plane OME-XML description: enough for the TIFF reader to name a scene.
+const OME_XML: &str = r#"<?xml version="1.0"?>
+<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">
+  <Image Name="grey"><Pixels DimensionOrder="XYCZT" Type="uint8" SizeX="2" SizeY="2" SizeZ="1" SizeC="1" SizeT="1"/></Image>
+</OME>"#;
+
+#[test]
+fn detect_format_and_open_agree_on_every_route() {
+    // A .tif-named STK: the probe cannot see the first IFD, so both must name an STK, not one plane of four.
+    let stk = scratch("routes_stk", "tif");
+    StkFile::u16(5, 3, 4).write(&stk);
+    assert_eq!(phasit_imread::detect_format(&stk).unwrap(), Format::Stk);
+    assert_eq!(
+        phasit_imread::open(&stk)
+            .unwrap()
+            .meta()
+            .scene(0)
+            .unwrap()
+            .dims
+            .z,
+        4
+    );
+
+    // The .stk name, a plain two-page TIFF and an OME-TIFF keep what the probe says.
+    let named = scratch("routes_named", "stk");
+    StkFile::u16(5, 3, 2).write(&named);
+    assert_eq!(phasit_imread::detect_format(&named).unwrap(), Format::Stk);
+    assert_eq!(
+        phasit_imread::open(&named)
+            .unwrap()
+            .meta()
+            .scene(0)
+            .unwrap()
+            .dims
+            .z,
+        2
+    );
+
+    let plain = scratch("routes_plain", "tif");
+    support::write_grey(
+        &plain,
+        None,
+        &[
+            support::GreyPage {
+                width: 4,
+                height: 3,
+                value: 7,
+            },
+            support::GreyPage {
+                width: 4,
+                height: 3,
+                value: 9,
+            },
+        ],
+    );
+    assert_eq!(phasit_imread::detect_format(&plain).unwrap(), Format::Tiff);
+    assert_eq!(
+        phasit_imread::open(&plain)
+            .unwrap()
+            .meta()
+            .scene(0)
+            .unwrap()
+            .dims
+            .z,
+        2
+    );
+
+    let ome = scratch("routes_ome", "ome.tif");
+    support::write_grey(
+        &ome,
+        Some(OME_XML),
+        &[support::GreyPage {
+            width: 2,
+            height: 2,
+            value: 5,
+        }],
+    );
+    assert_eq!(phasit_imread::detect_format(&ome).unwrap(), Format::OmeTiff);
+    assert_eq!(phasit_imread::open(&ome).unwrap().meta().scene_count(), 1);
+}
