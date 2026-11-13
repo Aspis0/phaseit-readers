@@ -5,8 +5,10 @@
 //! the z-series. A wavelength without a z-series holds ONE plane in a z-dataset: its second plane is refused, never
 //! the first plane repeated.
 //! The image files are opened when a plane of them is first read and kept for the next one; a file the dataset
-//! directory does not hold is refused by name when its plane is read, never a zero plane.
-//! Calibration comes from the dataset's first file; the z step comes from the `.nd` file's own `ZStepSize`.
+//! directory does not hold, or one that does not decode, is refused by its name when its plane is read, never a
+//! zero plane and never a path.
+//! Calibration comes from the dataset's first file; the z step comes from the `.nd` file's own `ZStepSize` and
+//! stands on its own when that first file states no pixel size.
 
 mod listing;
 mod names;
@@ -20,7 +22,7 @@ use std::sync::Arc;
 
 use crate::calibration::Calibration;
 use crate::error::{Error, Result};
-use crate::guard::MAX_ND_FILE_BYTES;
+use crate::guard::{MAX_ND_FILE_BYTES, MAX_ND_LISTING_ENTRIES};
 use crate::types::{ChannelMeta, Dims5, ImageMeta, ImageReader, Plane, SceneMeta};
 
 use self::listing::Listing;
@@ -41,10 +43,8 @@ impl ImageReader for NdReader {
         let dataset = parse::parse(&text, &stem(path))?;
         names::guard_names(&dataset)?;
 
-        let directory = path.parent().unwrap_or(Path::new("")).to_path_buf();
-        let listing = Listing::read(&directory)?;
-        let reference = reference(&dataset, &listing)?;
-        let reader = sources::open_file(&reference)?;
+        let listing = Listing::read(dataset_directory(path), MAX_ND_LISTING_ENTRIES)?;
+        let (reference, reader) = reference(&dataset, &listing)?;
         let geometry = geometry(reader.as_ref())?;
         let calibration = calibration(&dataset, reader.as_ref());
 
@@ -95,22 +95,29 @@ impl ImageReader for NdReader {
     }
 }
 
-/// The dataset's first image file: the geometry and the calibration of the dataset are its own.
-fn reference(dataset: &Dataset, listing: &Listing) -> Result<PathBuf> {
+/// The dataset's first image file that reads: a file that does not decode is skipped, so one corrupt member does
+/// not close the whole acquisition. When no file reads, the first failure is named.
+fn reference(dataset: &Dataset, listing: &Listing) -> Result<(PathBuf, Arc<dyn ImageReader>)> {
+    let mut first_error: Option<Error> = None;
     for wave in 1..=dataset.waves.len() {
         for stage in 1..=dataset.stages.len() {
             for time in 1..=dataset.times {
                 let name = names::file_name(dataset, wave, stage, time);
-                if let Some(path) = listing.find(&name) {
-                    return Ok(path.to_path_buf());
+                let Some(path) = listing.find(&name) else {
+                    continue;
+                };
+                match sources::open_file(path) {
+                    Ok(reader) => return Ok((path.to_path_buf(), reader)),
+                    Err(error) => first_error = first_error.or(Some(error)),
                 }
             }
         }
     }
-    Err(Error::Unsupported(
-        "MetaMorph .nd: the dataset directory holds none of the image files the dataset declares"
-            .to_string(),
-    ))
+    Err(first_error.unwrap_or_else(|| {
+        Error::Unsupported(
+            "MetaMorph .nd: the dataset directory holds none of the image files the dataset declares".to_string(),
+        )
+    }))
 }
 
 /// The geometry of the dataset, as the first file states it.
@@ -120,20 +127,22 @@ fn geometry(reader: &dyn ImageReader) -> Result<Geometry> {
         dtype: scene.dtype,
         x: scene.dims.x,
         y: scene.dims.y,
+        samples: scene.samples,
     })
 }
 
-/// The calibration of the dataset: the first file's own, with the z step the `.nd` file states.
+/// The calibration of the dataset: the first file's own pixel size, and the z step the `.nd` file states. The z
+/// step stands on its own: a first file that states no pixel size does not take the z step down with it.
 fn calibration(dataset: &Dataset, reader: &dyn ImageReader) -> Calibration {
-    let Some(px) = reader
+    let pixel = reader
         .meta()
         .scene(0)
         .ok()
-        .and_then(|scene| scene.px_size_um)
-    else {
-        return Calibration::uncalibrated(vec![NO_SCALE.to_string()]);
-    };
-    Calibration::sized(px.x, px.y, dataset.z_step_um)
+        .and_then(|scene| scene.px_size_um);
+    match pixel {
+        Some(px) => Calibration::sized(px.x, px.y, dataset.z_step_um),
+        None => Calibration::z_only(dataset.z_step_um, NO_SCALE.to_string()),
+    }
 }
 
 /// The dataset's scenes: one per stage position, with the wavelengths as its channels.
@@ -160,7 +169,7 @@ fn meta(dataset: &Dataset, geometry: Geometry, calibration: Calibration) -> Imag
         .map(|(index, stage)| SceneMeta {
             dims,
             dtype: geometry.dtype,
-            samples: 1,
+            samples: geometry.samples,
             px_size_um: calibration.px_size_um,
             notes: calibration.notes.clone(),
             channels: channels.clone(),
@@ -208,10 +217,19 @@ fn read_capped(path: &Path) -> Result<Vec<u8>> {
 
 /// The `.nd` text: UTF-8 when the bytes are UTF-8, Latin-1 otherwise, so a stray byte is never a panic.
 fn decode(bytes: &[u8]) -> String {
+    // The byte order mark the detection tolerates is taken off here, so both ends of the feature agree.
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     match std::str::from_utf8(bytes) {
         Ok(text) => text.to_string(),
         Err(_) => bytes.iter().map(|byte| char::from(*byte)).collect(),
     }
+}
+
+/// The dataset's own directory: a file name without a directory part sits in the current one.
+fn dataset_directory(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
 }
 
 /// The `.nd` file's name without its extension: the image files are named after it.
@@ -222,4 +240,5 @@ fn stem(path: &Path) -> String {
         .to_string()
 }
 
-const NO_SCALE: &str = "the dataset's first image file states no pixel size this reader can use";
+const NO_SCALE: &str =
+    "the dataset's first image file states no pixel size this reader can use, so the published x and y sizes are 0";

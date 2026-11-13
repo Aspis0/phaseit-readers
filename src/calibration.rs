@@ -35,6 +35,28 @@ impl Calibration {
         }
     }
 
+    /// A calibration that knows the Z step but no pixel size: the Z distance stands on its own, so it is published
+    /// even when the file states no size along x and y, which are published as 0.
+    pub fn z_only(stated_z_um: Option<f32>, note: String) -> Self {
+        let z = resolve_z_step(stated_z_um);
+        let mut notes: Vec<String> = z.note.into_iter().collect();
+        notes.push(note);
+        match z.um {
+            Some(um) => Self {
+                px_size_um: Some(PxSizeUm {
+                    z: Some(um),
+                    y: 0.0,
+                    x: 0.0,
+                }),
+                notes,
+            },
+            None => Self {
+                px_size_um: None,
+                notes,
+            },
+        }
+    }
+
     pub fn uncalibrated(notes: Vec<String>) -> Self {
         Self {
             px_size_um: None,
