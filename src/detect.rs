@@ -67,7 +67,7 @@ fn is_n5(path: &Path) -> Result<bool> {
 /// An `attributes.json` is probed exactly as far as the reader itself reads it: a file past the cap is refused
 /// here as `N5Reader::open` refuses it, never mistaken for another format.
 fn has_dimensions(attributes: &Path) -> Result<bool> {
-    let Ok(mut file) = File::open(attributes) else {
+    let Ok(file) = File::open(attributes) else {
         return Ok(false);
     };
     let mut head = Vec::new();
