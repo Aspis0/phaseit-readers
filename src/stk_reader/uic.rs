@@ -8,7 +8,11 @@ use crate::types::Endian;
 
 use super::ifd::{self, Entry};
 
-const ADDRESS_OVERFLOW: &str = "MetaMorph UIC2's value starts past the end of the address space";
+const ADDRESS_OVERFLOW: &str = "MetaMorph UIC2's records start past the end of the address space";
+
+/// Bytes of one UIC2 plane record: six uint32, the z distance as a rational and two date/time pairs. The record is
+/// what the format defines, so the declared field type does not size it.
+const RECORD_BYTES: usize = 24;
 
 /// The UIC1 entry ids this reader reads.
 const X_CALIBRATION: u32 = 4;
@@ -21,32 +25,25 @@ pub(super) struct Scale {
     pub y_um: Option<f32>,
 }
 
-/// The number of planes UIC2 declares, once the value it declares is found inside the file.
+/// The number of planes UIC2 declares, once the records the format gives each plane are inside the file.
 pub(super) fn plane_count(buf: &[u8], uic2: &Entry) -> Result<usize> {
     if uic2.count == 0 {
         return Err(Error::Unsupported(
             "MetaMorph UIC2 states no plane: its count is 0".to_string(),
         ));
     }
-    let size = value_size(uic2.kind)
-        .and_then(|unit| uic2.count.checked_mul(unit))
-        .ok_or_else(|| {
-            Error::Unsupported(format!(
-                "MetaMorph UIC2 declares the TIFF type {} this reader does not know",
-                uic2.kind
-            ))
-        })?;
-    // A value that fits in the entry's own four bytes is inside the file by construction.
-    if size <= 4 {
-        return Ok(uic2.count);
-    }
+    let size = uic2
+        .count
+        .checked_mul(RECORD_BYTES)
+        .ok_or_else(|| Error::Parse(OVERFLOW.to_string()))?;
     let end = uic2
         .at
         .checked_add(size)
         .ok_or_else(|| Error::Parse(ADDRESS_OVERFLOW.to_string()))?;
     if end > buf.len() {
         return Err(Error::Parse(format!(
-            "MetaMorph UIC2's {size}-byte value at byte {} ends at byte {end}, past the end of the {}-byte file",
+            "MetaMorph UIC2's {size} bytes of records for {} plane(s) at byte {} end at byte {end}, past the end of the {}-byte file",
+            uic2.count,
             uic2.at,
             buf.len()
         )));
@@ -54,16 +51,8 @@ pub(super) fn plane_count(buf: &[u8], uic2: &Entry) -> Result<usize> {
     Ok(uic2.count)
 }
 
-/// Bytes of one value of a TIFF field type; `None` for a type outside TIFF 6.0 and BigTIFF.
-fn value_size(kind: u16) -> Option<usize> {
-    match kind {
-        1 | 2 | 6 | 7 => Some(1),
-        3 | 8 => Some(2),
-        4 | 5 | 9 | 11 => Some(4),
-        10 | 12 | 16 | 17 | 18 => Some(8),
-        _ => None,
-    }
-}
+const OVERFLOW: &str =
+    "MetaMorph UIC2 states a plane count whose records overflow the address space";
 
 /// The pixel size the UIC1 entries state, in the unit its own CalibrationUnits entry names.
 pub(super) fn scale(buf: &[u8], uic1: Option<Entry>, endian: Endian) -> Scale {

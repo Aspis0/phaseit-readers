@@ -51,9 +51,6 @@ enum Uic {
     Text(&'static str),
 }
 
-/// The TIFF field type of a LONG, which every hand-built entry here declares.
-const TYPE_LONG: u16 = 4;
-
 /// A UIC1 table at byte 8, its pairs pointing at the rationals and strings that follow them.
 fn uic1(entries: &[(u32, Uic)]) -> (Vec<u8>, Entry) {
     let mut buf = vec![0u8; 8 + 8 * entries.len()];
@@ -85,7 +82,6 @@ fn uic1(entries: &[(u32, Uic)]) -> (Vec<u8>, Entry) {
     (
         buf,
         Entry {
-            kind: TYPE_LONG,
             count: entries.len(),
             at: 8,
         },
@@ -151,22 +147,13 @@ fn a_byte_order_that_is_not_a_classic_tiff_is_refused() {
 
 #[test]
 fn uic2_states_its_plane_count() {
-    let buf = vec![0u8; 8 + 24 * 3];
-    let entry = Entry {
-        kind: TYPE_LONG,
-        count: 3,
-        at: 8,
-    };
-    assert_eq!(plane_count(&buf, &entry).unwrap(), 3);
+    let entry = Entry { count: 3, at: 8 };
+    assert_eq!(plane_count(&vec![0u8; 8 + 24 * 3], &entry).unwrap(), 3);
 }
 
 #[test]
 fn uic2_of_no_plane_is_refused() {
-    let entry = Entry {
-        kind: TYPE_LONG,
-        count: 0,
-        at: 8,
-    };
+    let entry = Entry { count: 0, at: 8 };
     assert!(matches!(
         plane_count(&[0u8; 64], &entry),
         Err(Error::Unsupported(_))
@@ -175,26 +162,23 @@ fn uic2_of_no_plane_is_refused() {
 
 #[test]
 fn uic2_value_past_the_end_of_the_file_is_refused() {
-    let entry = Entry {
-        kind: TYPE_LONG,
-        count: 8,
-        at: 8,
-    };
+    // Eight planes need 192 bytes of records: this file holds 24.
+    let entry = Entry { count: 8, at: 8 };
     assert!(matches!(
         plane_count(&[0u8; 24], &entry),
-        Err(Error::Parse(message)) if message.contains("past the end")
+        Err(Error::Parse(message)) if message.contains("records")
     ));
 }
 
 #[test]
-fn uic2_of_one_plane_inside_its_entry_is_a_plane_count() {
-    // A single LONG value is the entry's own four bytes, so no file offset is read at all.
-    let entry = Entry {
-        kind: TYPE_LONG,
-        count: 1,
-        at: 0,
-    };
-    assert_eq!(plane_count(&[], &entry).unwrap(), 1);
+fn one_plane_still_needs_its_own_record() {
+    // The record is six uint32 whatever the field type: a 4-byte value in the entry is not one.
+    let entry = Entry { count: 1, at: 8 };
+    assert_eq!(plane_count(&vec![0u8; 8 + 24], &entry).unwrap(), 1);
+    assert!(matches!(
+        plane_count(&[0u8; 24], &entry),
+        Err(Error::Parse(message)) if message.contains("records")
+    ));
 }
 
 #[test]
@@ -241,11 +225,7 @@ fn a_file_without_uic1_states_no_scale() {
 
 #[test]
 fn a_uic1_table_outside_the_file_is_ignored() {
-    let entry = Entry {
-        kind: TYPE_LONG,
-        count: 3,
-        at: 4096,
-    };
+    let entry = Entry { count: 3, at: 4096 };
     let scale = scale(&[0u8; 64], Some(entry), Endian::Little);
     assert_eq!((scale.x_um, scale.y_um), (None, None));
 }

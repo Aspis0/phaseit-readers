@@ -26,9 +26,6 @@ const TAG_SAMPLE_FORMAT: u16 = 339;
 /// Bytes of one UIC2 plane record.
 const RECORD_BYTES: usize = 24;
 
-/// An offset past the end of any file these tests write.
-const PAST_END: u32 = u32::MAX;
-
 /// How UIC2 declares its plane table: real files use both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Uic2Type {
@@ -301,7 +298,8 @@ impl StkFile {
         for _ in 0..self.uic1_repeat {
             for (index, (id, value)) in pairs.iter().enumerate() {
                 let at = match value {
-                    Uic1Value::PastEnd => PAST_END,
+                    // Past the end of any file these tests write.
+                    Uic1Value::PastEnd => u32::MAX,
                     _ => places.uic1_values[index],
                 };
                 self.put(out, *id, 4);

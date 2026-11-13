@@ -22,10 +22,9 @@ const NOT_CLASSIC: &str =
     "MetaMorph STK is a classic TIFF: the byte-order mark is neither II* nor MM*";
 const OVERFLOW: &str = "MetaMorph STK: an offset in the first IFD overflows usize";
 
-/// One tag's value: `kind` TIFF field type, `count` of them, and the byte `at` where a value that does not fit in the
-/// entry's own four bytes sits.
+/// One tag's values: `count` of them, and the byte `at` where they sit when they do not fit in the entry's own four
+/// bytes.
 pub(super) struct Entry {
-    pub kind: u16,
     pub count: usize,
     pub at: usize,
 }
@@ -53,7 +52,6 @@ pub(super) fn entry(buf: &[u8], endian: Endian, tag: u16) -> Result<Option<Entry
         let raw = bytes_at(buf, at, ENTRY_BYTES)?;
         if u16_at(raw, 0, endian)? == tag {
             return Ok(Some(Entry {
-                kind: u16_at(raw, 2, endian)?,
                 count: u32_at(raw, 4, endian)? as usize,
                 at: u32_at(raw, 8, endian)? as usize,
             }));

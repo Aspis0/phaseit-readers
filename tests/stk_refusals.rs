@@ -9,7 +9,7 @@ use phasit_imread::stk_reader::StkReader;
 use phasit_imread::{Error, ImageReader};
 
 use support::scratch::Scratch;
-use support::stk::StkFile;
+use support::stk::{StkFile, Uic2Type};
 
 fn scratch(name: &str) -> Scratch {
     Scratch::new(std::env::temp_dir().join(format!("phasit_stk_{name}_{}.stk", std::process::id())))
@@ -112,4 +112,24 @@ fn planes_past_the_end_of_the_file_are_refused() {
     let message = refusal(&file, "planes_past_end");
     assert!(message.contains("past the end"), "{message}");
     assert!(message.contains("plane(s)"), "{message}");
+}
+
+#[test]
+fn a_uic2_table_shorter_than_its_plane_records_is_refused() {
+    // Six uint32 per plane, whatever type the tag declares: 8, 16 and 32 bytes are all short of the 96 a 4-plane file
+    // needs, and they sit where the file ends so nothing else can stand in for them.
+    for (kind, present) in [
+        (Uic2Type::Rational, 8),
+        (Uic2Type::Long, 16),
+        (Uic2Type::Rational, 32),
+    ] {
+        let mut file = StkFile {
+            uic2_type: kind,
+            ..StkFile::u16(5, 3, 4)
+        };
+        file.uic2_at = Some((file.bytes().len() - present) as u32);
+        let message = refusal(&file, "short_uic2");
+        assert!(message.contains("records"), "{message}");
+        assert!(message.contains("past the end"), "{message}");
+    }
 }
