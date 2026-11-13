@@ -295,7 +295,7 @@ mod tests {
                 out
             }
             Compression::Zstd => ruzstd::encoding::compress_to_vec(
-                &raw,
+                &raw[..],
                 ruzstd::encoding::CompressionLevel::Fastest,
             ),
         }
@@ -374,7 +374,6 @@ mod tests {
         // the 32-byte payload is read.
         let header = BlockHeader {
             size: vec![2000, 2000, 1_000_000],
-            len: 16,
         };
         let error = decode(&header, &[0u8; 32], Compression::Gzip, DType::U8)
             .err()
