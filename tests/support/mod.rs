@@ -11,6 +11,7 @@ pub mod lif;
 pub mod lsm;
 pub mod mrc;
 pub mod n5;
+pub mod nd;
 pub mod dv;
 pub mod nd2;
 pub mod scratch;

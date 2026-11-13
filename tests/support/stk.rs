@@ -48,6 +48,8 @@ pub struct StkFile {
     pub planes: usize,
     pub bits: u16,
     pub big_endian: bool,
+    /// Added to every sample written: a dataset of several files needs them to differ.
+    pub value_offset: u16,
     /// Rows per strip of plane 0; `None` writes one strip for the whole plane.
     pub rows_per_strip: Option<u32>,
     /// Bytes written between two strips of plane 0; 0 writes them contiguous.
@@ -99,6 +101,7 @@ impl StkFile {
             planes,
             bits,
             big_endian: false,
+            value_offset: 0,
             rows_per_strip: None,
             strip_gap: 0,
             strip_bytes_short: 0,
@@ -361,7 +364,7 @@ impl StkFile {
 
     /// One sample, in the file's byte order when it is wider than a byte.
     fn push_sample(&self, out: &mut Vec<u8>, plane: usize, y: u32, x: u32) {
-        let value = sample_at(plane, y, x);
+        let value = sample_at(plane, y, x).wrapping_add(self.value_offset);
         if self.bits == 8 {
             out.push(value as u8);
             return;
