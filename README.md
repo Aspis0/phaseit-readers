@@ -116,6 +116,16 @@ rest rather than guess:
   fastest axes are not x then y, and data past the end of the file. A
   gzip plane costs the whole stream before it: there is no index into a deflated
   file. `region` is the trait default.
+- **MetaMorph STK** (Molecular Devices) — one scene: the UIC2 plane table's count is the Z
+  length, and the planes follow plane 0 with no gap. A compression other than none, more than
+  one sample per pixel, a sample type other than unsigned 8 or 16 bit, strips of plane 0 that do
+  not touch, a UIC2 of no plane, and a plane count whose records or planes run past the end of
+  the file are refused. The pixel size comes from UIC1's XCalibration and YCalibration and is
+  published only when its own CalibrationUnits entry names a unit this reader converts (µm or
+  nm); any other unit, no units entry and no UIC1 leave the scene uncalibrated, never guessed. A
+  UIC1 entry whose offset is outside the file is ignored. The UIC2 z distance is not published:
+  what it measures varies between writers, and the MetaMorph `.nd` companion file is not read.
+  `region` is the trait default.
 
 ## API
 
