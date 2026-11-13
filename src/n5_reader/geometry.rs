@@ -154,6 +154,17 @@ fn copy(
     out: &mut [u8],
 ) -> Result<()> {
     let (sample, row) = (block.sample_bytes(), block.row_bytes());
+    // The flat-buffer check below cannot see an overrun that stays inside the plane: a row whose last samples
+    // land on the next row is silent corruption, so the placement itself is checked against the edge.
+    if left + block.shape()[0] > plane.x || top + block.shape()[1] > plane.y {
+        return Err(Error::Decode(format!(
+            "N5 block {}x{} (x x y) at ({left}, {top}) runs past the {}x{} plane's edge",
+            block.shape()[0],
+            block.shape()[1],
+            plane.x,
+            plane.y
+        )));
+    }
     for y in 0..block.shape()[1] {
         let from = block.row(z, y)?;
         let at = (top + y) * plane.x * sample + left * sample;
@@ -329,5 +340,21 @@ mod tests {
             layout.plane(0, |_| Ok(None)),
             Err(Error::OversizedAllocation { .. })
         ));
+    }
+
+    #[test]
+    fn a_full_block_at_the_edge_is_refused_not_wrapped_into_the_next_row() {
+        // Grid (2, 0) of a 7-wide plane holds only x 6..7, so a block stating its full extent would write its
+        // last samples into the next row: refused along one axis as along the other.
+        let layout = layout(&attributes(vec![7, 5], vec![3, 2])).unwrap();
+        let reads = |at: [usize; 2]| {
+            layout.plane(0, |g| {
+                Ok((g[0] == at[0] && g[1] == at[1]).then(|| block([2, 3], 238)))
+            })
+        };
+        for at in [[2, 0], [0, 2]] {
+            let error = reads(at).err().expect("a block past the plane's edge");
+            assert!(error.to_string().contains("edge"), "{at:?}: {error}");
+        }
     }
 }
