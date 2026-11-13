@@ -351,7 +351,7 @@ mod tests {
             })
         };
         for at in [[2, 0], [0, 2]] {
-            let error = reads(at).err().expect("a block past the plane's edge");
+            let error = reads(at).expect_err("a block past the plane's edge");
             assert!(error.to_string().contains("edge"), "{at:?}: {error}");
         }
     }

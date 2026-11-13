@@ -42,7 +42,10 @@ fn a_large_but_valid_attributes_json_is_detected_and_opens() {
         Format::N5
     );
     assert_eq!(
-        open(&six_kb).expect("open the padded dataset").meta().scene_count(),
+        open(&six_kb)
+            .expect("open the padded dataset")
+            .meta()
+            .scene_count(),
         1
     );
     let huge = padded("guards_detect_huge", 1_048_578);
@@ -73,7 +76,7 @@ fn sparse_block(name: &str, header: Vec<u8>, length: u64) -> N5Dataset {
 fn a_block_file_past_its_payload_is_refused_after_its_header_not_after_the_gigabyte() {
     // The header alone decides whether the rest of the file is worth reading, so a block file that claims a
     // gigabyte is refused in well under a second, whether its header is valid or not.
-    let mut bad = vec![1u16, 3u16]
+    let mut bad = [1u16, 3u16]
         .iter()
         .flat_map(|v| v.to_be_bytes())
         .collect::<Vec<u8>>();
@@ -119,10 +122,16 @@ fn a_compressed_stream_of_another_length_is_refused_by_the_length_guard() {
         let short = vec![7u8; 7];
         dataset.write_stream(&[0, 0, 0], &[2, 2, 1], &short);
         let message = plane_refusal(&dataset);
-        assert!(message.contains("inflates to 7"), "{compression}: {message}");
+        assert!(
+            message.contains("inflates to 7"),
+            "{compression}: {message}"
+        );
         let long = vec![7u8; 8 + 1024];
         dataset.write_stream(&[0, 0, 0], &[2, 2, 1], &long);
         let message = plane_refusal(&dataset);
-        assert!(message.contains("inflates to 9"), "{compression}: {message}");
+        assert!(
+            message.contains("inflates to 9"),
+            "{compression}: {message}"
+        );
     }
 }

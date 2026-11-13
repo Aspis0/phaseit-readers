@@ -203,9 +203,10 @@ impl N5Dataset {
                 encoder.write_all(plain).expect("deflate the stream");
                 encoder.finish().expect("finish the gzip stream")
             }
-            Some("zstd") => {
-                ruzstd::encoding::compress_to_vec(plain, ruzstd::encoding::CompressionLevel::Fastest)
-            }
+            Some("zstd") => ruzstd::encoding::compress_to_vec(
+                plain,
+                ruzstd::encoding::CompressionLevel::Fastest,
+            ),
             _ => plain.to_vec(),
         };
         self.write_raw(grid, size, &stored);
