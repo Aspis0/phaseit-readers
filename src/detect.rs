@@ -2,6 +2,8 @@
 //! Magic-byte probe (first 16 bytes) plus extension; the pure logic is in [`detect_from`], so tests need no disk.
 //! N5 is the exception: a dataset is a directory (or its `attributes.json`), which has no magic, so the file
 //! system recognises it before the probe; every other format is probed exactly as before.
+//! A MetaMorph `.nd` dataset is a text file: its extension and the `"NDInfoFile"` key it opens with name it
+//! together, so a text file renamed `.nd` is not one.
 
 use std::ffi::OsStr;
 use std::fs::File;
@@ -34,6 +36,8 @@ pub enum Format {
     Stk,
     /// N5 (Saalfeld lab / BigDataViewer): a directory holding `attributes.json`; no magic, the layout detects it.
     N5,
+    /// MetaMorph Multi-Dimensional Acquisition: a `.nd` text file listing the acquisition, beside its image files.
+    MetaMorphNd,
     Oib,
     /// Olympus OIF (text master file referencing external data).
     Oif,
@@ -45,6 +49,10 @@ const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 const ND2_MAGIC: [u8; 4] = [0xDA, 0xCE, 0xBE, 0x0A];
 /// The ICS header opens with its two separators, then `ics_version`: bytes 2..13 of the probe.
 const ICS_MAGIC: [u8; 11] = *b"ics_version";
+/// A MetaMorph `.nd` file opens with its `"NDInfoFile"` key, which the probe reaches.
+const ND_MAGIC: &[u8] = b"\"NDInfoFile\"";
+/// A UTF-8 byte order mark may precede the first key.
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
 fn is_tiff_magic(h: &[u8]) -> bool {
     h.starts_with(b"II\x2A\x00")
@@ -91,6 +99,12 @@ fn ext_of(name: &str) -> &str {
     name.rsplit_once('.').map(|(_, e)| e).unwrap_or("")
 }
 
+/// A MetaMorph `.nd` file opens with its `"NDInfoFile"` key; a byte order mark may precede it.
+fn is_nd_magic(header: &[u8]) -> bool {
+    let body = header.strip_prefix(&UTF8_BOM[..]).unwrap_or(header);
+    body.len() >= ND_MAGIC.len() && body[..ND_MAGIC.len()].eq_ignore_ascii_case(ND_MAGIC)
+}
+
 /// A real LIF header: LE `0x70` test value, a block length, then `0x2A` at offset 8.
 /// Strong enough to detect without the extension: a text file renamed `notes.lif` is rejected.
 fn is_lif_magic(h: &[u8]) -> bool {
@@ -122,6 +136,10 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
     }
     if header.get(2..13) == Some(&ICS_MAGIC) {
         return Ok(Format::Ics);
+    }
+    // A MetaMorph dataset is a `.nd` text file: the extension and the `"NDInfoFile"` key name it together.
+    if ext == "nd" && is_nd_magic(header) {
+        return Ok(Format::MetaMorphNd);
     }
     if is_tiff_magic(header) {
         if ext == "lsm" {
@@ -185,6 +203,7 @@ pub fn open(path: &Path) -> Result<Box<dyn ImageReader>> {
         Format::Dv => Ok(Box::new(crate::dv_reader::DvReader::open(path)?)),
         Format::Ics => Ok(Box::new(crate::ics_reader::IcsReader::open(path)?)),
         Format::N5 => Ok(Box::new(crate::n5_reader::N5Reader::open(path)?)),
+        Format::MetaMorphNd => Ok(Box::new(crate::nd_reader::NdReader::open(path)?)),
         Format::Oib => Err(Error::NotImplemented(fmt)),
         Format::Oif => Err(Error::NotImplemented(fmt)),
     }
@@ -405,6 +424,36 @@ mod tests {
             "a directory without attributes.json is no dataset"
         );
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_metamorph_nd_dataset_is_detected_by_its_extension_and_its_first_key() {
+        let header = b"\"NDInfoFile\", Version 1.0\r\n";
+        assert_eq!(
+            detect_from(header, Some("acq.nd")).unwrap(),
+            Format::MetaMorphNd
+        );
+        assert_eq!(
+            detect_from(header, Some("acq.ND")).unwrap(),
+            Format::MetaMorphNd
+        );
+        // A byte order mark may precede the first key.
+        let mut with_bom = UTF8_BOM.to_vec();
+        with_bom.extend_from_slice(header);
+        assert_eq!(
+            detect_from(&with_bom, Some("acq.nd")).unwrap(),
+            Format::MetaMorphNd
+        );
+        // The extension alone is not enough: a text file renamed `.nd` is not a dataset.
+        assert!(matches!(
+            detect_from(b"just some notes\n", Some("acq.nd")),
+            Err(Error::Unsupported(_))
+        ));
+        // And the key alone does not name it: the extension is part of the format's name.
+        assert!(matches!(
+            detect_from(header, Some("acq.txt")),
+            Err(Error::Unsupported(_))
+        ));
     }
 
     #[test]
