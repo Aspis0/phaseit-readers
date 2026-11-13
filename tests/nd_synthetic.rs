@@ -286,7 +286,8 @@ fn a_dataset_opens_by_a_bare_name_in_the_current_directory() {
     let _guard = CurrentDir(previous);
     std::env::set_current_dir(&*dataset).expect("enter the dataset directory");
 
-    let reader = NdReader::open(Path::new("dataset.nd")).expect("open the dataset by its bare name");
+    let reader =
+        NdReader::open(Path::new("dataset.nd")).expect("open the dataset by its bare name");
     assert_eq!(reader.meta().scene_count(), 1);
     assert_eq!(
         reader.plane(0, 0, 0, 0).expect("the plane").data,
@@ -323,7 +324,10 @@ fn a_colour_file_publishes_its_samples_per_pixel() {
     let volume = reader
         .volume(0, 0, 0, Box3::new(0, 0, 0, 3, 2, 1))
         .expect("the volume of the colour file");
-    assert_eq!(volume.samples, 3, "the volume holds the samples of the file");
+    assert_eq!(
+        volume.samples, 3,
+        "the volume holds the samples of the file"
+    );
 }
 
 #[test]

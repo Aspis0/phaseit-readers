@@ -19,7 +19,8 @@ impl Drop for Folder {
 }
 
 fn folder(name: &str) -> Folder {
-    let path = std::env::temp_dir().join(format!("phasit_nd_sources_{name}_{}", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("phasit_nd_sources_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create the folder");
     Folder(path)
@@ -27,8 +28,8 @@ fn folder(name: &str) -> Folder {
 
 /// A two-by-two grey TIFF: the smallest file a reader opens.
 fn write_tiff(path: &Path) {
-    let mut encoder = TiffEncoder::new(File::create(path).expect("create the TIFF"))
-        .expect("the TIFF encoder");
+    let mut encoder =
+        TiffEncoder::new(File::create(path).expect("create the TIFF")).expect("the TIFF encoder");
     encoder
         .write_image::<Gray8>(2, 2, &[1u8, 2, 3, 4])
         .expect("write the image");
@@ -53,7 +54,10 @@ fn the_cache_keeps_a_bound_number_of_files_open() {
         write_tiff(&path);
         sources.reader(&path).expect("the file is opened");
     }
-    let open = sources.open.lock().unwrap_or_else(|error| error.into_inner());
+    let open = sources
+        .open
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     assert!(
         open.len() <= MAX_CACHED_SOURCES,
         "{} files are open, the bound is {MAX_CACHED_SOURCES}",

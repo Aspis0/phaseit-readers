@@ -17,7 +17,8 @@ impl Drop for Folder {
 }
 
 fn folder(name: &str) -> Folder {
-    let path = std::env::temp_dir().join(format!("phasit_nd_listing_{name}_{}", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("phasit_nd_listing_{name}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("create the folder");
     Folder(path)
@@ -64,7 +65,8 @@ fn two_files_whose_names_differ_in_case_alone_are_refused() {
     std::fs::write(folder.0.join("Acq.TIF"), b"x").expect("write the file");
     std::fs::write(folder.0.join("acq.tif"), b"x").expect("write the file");
     // A case-insensitive file system folds the second name into the first, so there is nothing to refuse there.
-    if std::fs::read_dir(&folder.0).expect("read the folder").count() < 2 {
+    let listed = std::fs::read_dir(&folder.0).expect("read the folder");
+    if listed.count() < 2 {
         return;
     }
     let error = match Listing::read(&folder.0, 16) {

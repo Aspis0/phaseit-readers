@@ -246,7 +246,12 @@ fn flag(map: &HashMap<String, Value>, key: &str) -> Result<bool> {
 
 /// A count: absent means one, and a count below one is refused. The count of an axis the file does not state is
 /// ignored, so that a stale count cannot make a file hold planes it has none of.
-fn count(map: &HashMap<String, Value>, key: &str, stated: bool, limit: usize) -> Result<Option<usize>> {
+fn count(
+    map: &HashMap<String, Value>,
+    key: &str,
+    stated: bool,
+    limit: usize,
+) -> Result<Option<usize>> {
     if !stated {
         return Ok(None);
     }

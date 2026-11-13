@@ -125,5 +125,8 @@ fn a_wavelength_count_above_its_own_cap_is_refused() {
     let error = parse(text, "base").expect_err("a million wavelengths");
     let message = error.to_string();
     assert!(message.contains("NWavelengths"), "{message}");
-    assert!(message.contains(&MAX_ND_WAVELENGTHS.to_string()), "{message}");
+    assert!(
+        message.contains(&MAX_ND_WAVELENGTHS.to_string()),
+        "{message}"
+    );
 }
