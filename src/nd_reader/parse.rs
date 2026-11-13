@@ -3,10 +3,13 @@
 //! A missing key means the simpler thing: a missing `Do*` key means that axis holds one plane, a missing count
 //! means one, and a missing `WaveDoZ<i>` means the wavelength has a z-series.
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::HashMap;
 
 use crate::error::{Error, Result};
-use crate::guard::{MAX_ND_PLANES, MAX_SCENE_DIM};
+use crate::guard::{MAX_ND_AXIS_LEN, MAX_ND_PLANES, MAX_ND_WAVELENGTHS};
 
 /// One wavelength of the dataset: its name, and whether it holds a z-series.
 #[derive(Debug, Clone)]
@@ -46,13 +49,17 @@ enum Value {
 
 /// The dataset the text states.
 pub(super) fn parse(text: &str, base: &str) -> Result<Dataset> {
+    // A byte order mark may precede the first key: the detection tolerates it, so the parser does too.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let entries = entries(text)?;
     markers(&entries)?;
     let map = values(&entries);
     let axes = Axes::of(&map)?;
+    // The planes are counted before the per-axis vectors are built: a file that declares a million wavelengths must
+    // not cost a million allocations before it is refused.
+    guard_planes(axes.stages, axes.waves, axes.times, axes.z_steps)?;
     let waves = waves(&map, &axes)?;
     let stages = stages(&map, &axes)?;
-    guard_planes(axes.stages, axes.waves, axes.times, axes.z_steps)?;
 
     Ok(Dataset {
         base: base.to_string(),
@@ -112,10 +119,10 @@ impl Axes {
             do_stage,
             do_time,
             do_z,
-            waves: count(map, "NWavelengths", do_wave)?.unwrap_or(1),
-            stages: count(map, "NStagePositions", do_stage)?.unwrap_or(1),
-            times: count(map, "NTimePoints", do_time)?.unwrap_or(1),
-            z_steps: count(map, "NZSteps", do_z)?.unwrap_or(1),
+            waves: count(map, "NWavelengths", do_wave, MAX_ND_WAVELENGTHS)?.unwrap_or(1),
+            stages: count(map, "NStagePositions", do_stage, MAX_ND_AXIS_LEN)?.unwrap_or(1),
+            times: count(map, "NTimePoints", do_time, MAX_ND_AXIS_LEN)?.unwrap_or(1),
+            z_steps: count(map, "NZSteps", do_z, MAX_ND_AXIS_LEN)?.unwrap_or(1),
         })
     }
 }
@@ -207,20 +214,26 @@ fn value(raw: &str, number: usize) -> Result<(Value, &str)> {
     }
 }
 
-/// The entries as a map of the values; a key stated twice keeps its last value.
+/// The entries as a map of the values; a key stated twice keeps its last value. The keys are folded to lower case,
+/// because a Windows acquisition spells a key as "DoTimelapse" or "DoTimeLapse" alike.
 fn values(entries: &[(String, Option<Value>)]) -> HashMap<String, Value> {
     let mut map = HashMap::new();
     for (key, value) in entries {
         if let Some(value) = value {
-            map.insert(key.clone(), value.clone());
+            map.insert(key.trim().to_ascii_lowercase(), value.clone());
         }
     }
     map
 }
 
+/// The value of one key, whatever the case it is written in.
+fn get<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a Value> {
+    map.get(&key.to_ascii_lowercase())
+}
+
 /// A flag: absent means FALSE, and anything but TRUE or FALSE is a malformed line.
 fn flag(map: &HashMap<String, Value>, key: &str) -> Result<bool> {
-    match map.get(key) {
+    match get(map, key) {
         None => Ok(false),
         Some(Value::Bool(flag)) => Ok(*flag),
         Some(Value::Text(text)) if text.eq_ignore_ascii_case("TRUE") => Ok(true),
@@ -233,16 +246,16 @@ fn flag(map: &HashMap<String, Value>, key: &str) -> Result<bool> {
 
 /// A count: absent means one, and a count below one is refused. The count of an axis the file does not state is
 /// ignored, so that a stale count cannot make a file hold planes it has none of.
-fn count(map: &HashMap<String, Value>, key: &str, stated: bool) -> Result<Option<usize>> {
+fn count(map: &HashMap<String, Value>, key: &str, stated: bool, limit: usize) -> Result<Option<usize>> {
     if !stated {
         return Ok(None);
     }
-    match map.get(key) {
+    match get(map, key) {
         None => Ok(None),
         Some(Value::Number(number)) => {
-            if *number < 1.0 || number.fract() != 0.0 || *number > MAX_SCENE_DIM as f64 {
+            if *number < 1.0 || number.fract() != 0.0 || *number > limit as f64 {
                 return Err(Error::Unsupported(format!(
-                    "MetaMorph .nd {key} is {number}: a count must be a whole number from 1 to {MAX_SCENE_DIM}"
+                    "MetaMorph .nd {key} is {number}: a count must be a whole number from 1 to {limit}"
                 )));
             }
             Ok(Some(*number as usize))
@@ -253,7 +266,7 @@ fn count(map: &HashMap<String, Value>, key: &str, stated: bool) -> Result<Option
 
 /// A number as the file states it; absent means none.
 fn number(map: &HashMap<String, Value>, key: &str) -> Option<f64> {
-    match map.get(key) {
+    match get(map, key) {
         Some(Value::Number(number)) => Some(*number),
         _ => None,
     }
@@ -261,7 +274,7 @@ fn number(map: &HashMap<String, Value>, key: &str) -> Option<f64> {
 
 /// A text value; absent means none.
 fn name_of(map: &HashMap<String, Value>, key: &str) -> Option<String> {
-    match map.get(key) {
+    match get(map, key) {
         Some(Value::Text(text)) => Some(text.clone()),
         _ => None,
     }
@@ -269,13 +282,14 @@ fn name_of(map: &HashMap<String, Value>, key: &str) -> Option<String> {
 
 /// Whether one wavelength holds a z-series: the file states it per wavelength, and an absent key means it does.
 fn wave_do_z(map: &HashMap<String, Value>, index: usize) -> Result<bool> {
-    match map.get(&format!("WaveDoZ{index}")) {
+    let key = format!("WaveDoZ{index}");
+    match get(map, &key) {
         None => Ok(true),
         Some(Value::Bool(flag)) => Ok(*flag),
         Some(Value::Text(text)) if text.eq_ignore_ascii_case("TRUE") => Ok(true),
         Some(Value::Text(text)) if text.eq_ignore_ascii_case("FALSE") => Ok(false),
         Some(_) => Err(Error::Parse(format!(
-            "MetaMorph .nd WaveDoZ{index} is neither TRUE nor FALSE"
+            "MetaMorph .nd {key} is neither TRUE nor FALSE"
         ))),
     }
 }
@@ -295,105 +309,3 @@ fn guard_planes(stages: usize, waves: usize, times: usize, z_steps: usize) -> Re
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The dataset a text states, with the axes the text gives.
-    fn dataset(text: &str) -> Dataset {
-        parse(text, "base").expect("a dataset the text states")
-    }
-
-    #[test]
-    fn the_axes_come_from_the_do_keys() {
-        let text = "\"NDInfoFile\", Version 1.0\n\"DoWave\", TRUE\n\"NWavelengths\", 3\n\
-                    \"DoStage\", TRUE\n\"NStagePositions\", 2\n\"DoTimelapse\", TRUE\n\
-                    \"NTimePoints\", 4\n\"DoZSeries\", TRUE\n\"NZSteps\", 5\n\"EndFile\"\n";
-        let parsed = dataset(text);
-        assert_eq!(parsed.waves.len(), 3);
-        assert_eq!(parsed.stages.len(), 2);
-        assert_eq!(parsed.times, 4);
-        assert_eq!(parsed.z_steps, 5);
-        assert!(parsed.do_wave && parsed.do_stage && parsed.do_time);
-    }
-
-    #[test]
-    fn a_missing_do_key_means_one_plane_on_that_axis() {
-        let parsed = dataset("\"NDInfoFile\", Version 1.0\n\"NWavelengths\", 7\n\"EndFile\"\n");
-        assert_eq!(
-            parsed.waves.len(),
-            1,
-            "the count of an axis that is not stated is ignored"
-        );
-        assert_eq!(parsed.times, 1);
-        assert_eq!(parsed.z_steps, 1);
-        assert!(!parsed.do_wave);
-    }
-
-    #[test]
-    fn a_quoted_value_is_text_and_a_bare_one_is_read_by_its_kind() {
-        let parsed = dataset(
-            "\"NDInfoFile\", Version 1.0\n\"WaveName1\", \"DAPI\"\n\"WaveDoZ1\", FALSE\n\
-             \"ZStepSize\", 0.5\n\"EndFile\"\n",
-        );
-        assert_eq!(parsed.waves[0].name, "DAPI");
-        assert!(!parsed.waves[0].has_z, "the wavelength states no z-series");
-        assert_eq!(parsed.z_step_um, Some(0.5));
-    }
-
-    #[test]
-    fn a_missing_wave_do_z_key_means_the_wavelength_has_a_z_series() {
-        let parsed = dataset("\"NDInfoFile\", Version 1.0\n\"DoZSeries\", TRUE\n\"EndFile\"\n");
-        assert!(parsed.waves[0].has_z);
-    }
-
-    #[test]
-    fn a_malformed_line_is_refused() {
-        for text in [
-            "NDInfoFile, Version 1.0\n\"EndFile\"\n",
-            "\"NDInfoFile\n\"EndFile\"\n",
-            "\"NDInfoFile\" Version 1.0\n\"EndFile\"\n",
-            "\"NDInfoFile\", \"unterminated\n\"EndFile\"\n",
-        ] {
-            assert!(parse(text, "base").is_err(), "{text:?} is refused");
-        }
-    }
-
-    #[test]
-    fn a_file_that_does_not_start_with_ndinfofile_or_end_with_endfile_is_refused() {
-        let no_start = parse("\"EndFile\"\n", "base").expect_err("no NDInfoFile key");
-        assert!(no_start.to_string().contains("NDInfoFile"), "{no_start}");
-        let no_end = parse("\"NDInfoFile\", Version 1.0\n", "base").expect_err("no EndFile key");
-        assert!(no_end.to_string().contains("EndFile"), "{no_end}");
-    }
-
-    #[test]
-    fn a_count_of_zero_is_refused() {
-        let error = parse(
-            "\"NDInfoFile\", Version 1.0\n\"DoWave\", TRUE\n\"NWavelengths\", 0\n\"EndFile\"\n",
-            "base",
-        )
-        .expect_err("no wavelength at all");
-        assert!(error.to_string().contains("NWavelengths"), "{error}");
-    }
-
-    #[test]
-    fn a_dataset_above_the_plane_cap_is_refused() {
-        // Every count is within its own bound; the product of the three axes is not.
-        let text = "\"NDInfoFile\", Version 1.0\n\"DoWave\", TRUE\n\"NWavelengths\", 1000\n\
-                    \"DoStage\", TRUE\n\"NStagePositions\", 1000\n\"DoTimelapse\", TRUE\n\
-                    \"NTimePoints\", 1000\n\"EndFile\"\n";
-        let error = parse(text, "base").expect_err("too many planes");
-        assert!(error.to_string().contains("cap"), "{error}");
-    }
-
-    #[test]
-    fn a_count_above_its_own_bound_is_refused() {
-        let text = format!(
-            "\"NDInfoFile\", Version 1.0\n\"DoStage\", TRUE\n\"NStagePositions\", {}\n\"EndFile\"\n",
-            MAX_SCENE_DIM + 1
-        );
-        let error = parse(&text, "base").expect_err("too many stage positions");
-        assert!(error.to_string().contains("NStagePositions"), "{error}");
-    }
-}
