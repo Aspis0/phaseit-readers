@@ -194,6 +194,23 @@ impl N5Dataset {
         self.write_raw(grid, size, &payload);
     }
 
+    /// The block at `grid` whose header states `size`, holding the dataset's compression of exactly the plain
+    /// bytes given: a stream the decoder inflates to `plain.len()` bytes, whatever its stored length is.
+    pub fn write_stream(&self, grid: &[usize], size: &[usize], plain: &[u8]) {
+        let stored = match self.compression {
+            Some("gzip") => {
+                let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(plain).expect("deflate the stream");
+                encoder.finish().expect("finish the gzip stream")
+            }
+            Some("zstd") => {
+                ruzstd::encoding::compress_to_vec(plain, ruzstd::encoding::CompressionLevel::Fastest)
+            }
+            _ => plain.to_vec(),
+        };
+        self.write_raw(grid, size, &stored);
+    }
+
     /// Every block of the dataset, each sized to the extent it covers so every edge block is partial.
     pub fn write_all_blocks(&self) {
         for g_x in 0..self.count(0) {

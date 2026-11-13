@@ -103,3 +103,26 @@ fn a_block_file_past_its_payload_is_refused_after_its_header_not_after_the_gigab
         assert!(message.contains(sentence), "{name}: {message}");
     }
 }
+
+#[test]
+fn a_compressed_stream_of_another_length_is_refused_by_the_length_guard() {
+    // A stream that decodes whole but to another byte count than the block's own is refused by the length
+    // guard itself, not by a broken decoder: one byte less than the block, and one KiB past it.
+    for compression in ["gzip", "zstd"] {
+        let dataset = N5Dataset::new(
+            "stream_len",
+            &[4, 3, 2],
+            &[2, 2, 1],
+            DType::U16,
+            Some(compression),
+        );
+        let short = vec![7u8; 7];
+        dataset.write_stream(&[0, 0, 0], &[2, 2, 1], &short);
+        let message = plane_refusal(&dataset);
+        assert!(message.contains("inflates to 7"), "{compression}: {message}");
+        let long = vec![7u8; 8 + 1024];
+        dataset.write_stream(&[0, 0, 0], &[2, 2, 1], &long);
+        let message = plane_refusal(&dataset);
+        assert!(message.contains("inflates to 9"), "{compression}: {message}");
+    }
+}
