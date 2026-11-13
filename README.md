@@ -138,9 +138,12 @@ rest rather than guess:
   without a z-series holds ONE plane in a z-dataset: its second plane is refused,
   never the first plane repeated. An image file the dataset directory does not hold
   is refused by name (wavelength, stage position, time point) when its plane is
-  read, and an image file of another sample type or another size is refused by
-  name too. The pixel size comes from the dataset's first image file and the z step
-  from the `ZStepSize` of the `.nd` file. `region` is the trait default.
+  read, and an image file of another pixel type, another sample count or another
+  size is refused by name too. A file that does not decode is refused by its name
+  alone: the dataset still opens and its other planes are served. The pixel size
+  comes from the dataset's first image file and the z step from the `ZStepSize` of
+  the `.nd` file; a first file that states no pixel size leaves the z step on its
+  own. `region` is the trait default.
 - **N5** (Saalfeld lab / BigDataViewer) — one scene: a dataset is a directory
   holding `attributes.json` (or that file itself), and the block at `g0/g1/…` is
   one directory per axis but the last, which names the file. A block the dataset

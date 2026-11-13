@@ -77,6 +77,25 @@ impl NdDataset {
         path
     }
 
+    /// The image file named `name`: a one-plane TIFF of three samples per pixel.
+    pub fn write_tiff_rgb(&self, name: &str, width: u32, height: u32) -> PathBuf {
+        let path = self.dir.join(name);
+        write_striped(
+            &path,
+            None,
+            &[StripedPage {
+                width,
+                height,
+                samples: 3,
+                sample_type: SampleType::U8,
+                rows_per_strip: height,
+                planar: false,
+            }],
+            Compression::Uncompressed,
+        );
+        path
+    }
+
     /// The image file named `name`: an STK of `planes` planes, every sample carrying `offset`.
     pub fn write_stk(
         &self,

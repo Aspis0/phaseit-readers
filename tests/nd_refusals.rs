@@ -107,7 +107,20 @@ fn an_image_file_of_another_sample_type_is_refused() {
     let reader = NdReader::open(&dataset.join("dataset.nd")).expect("the dataset opens");
 
     let message = plane_refusal(&reader, 0, 1, 0, 0);
-    assert!(message.contains("samples"), "{message}");
+    assert!(message.contains("U16"), "{message}");
+    assert!(message.contains("dataset_w1DAPI_s1_t2.TIF"), "{message}");
+}
+
+#[test]
+fn an_image_file_of_another_sample_count_is_refused() {
+    // The first file of the dataset holds three samples per pixel, the second one a single sample.
+    let dataset = NdDataset::with_text("samples", &cube_text());
+    dataset.write_tiff_rgb("dataset_w1DAPI_s1_t1.TIF", 3, 2);
+    dataset.write_tiff("dataset_w1DAPI_s1_t2.TIF", 3, 2, 1);
+    let reader = NdReader::open(&dataset.join("dataset.nd")).expect("the dataset opens");
+
+    let message = plane_refusal(&reader, 0, 1, 0, 0);
+    assert!(message.contains("sample"), "{message}");
     assert!(message.contains("dataset_w1DAPI_s1_t2.TIF"), "{message}");
 }
 
@@ -199,6 +212,36 @@ fn a_dataset_without_any_image_file_is_refused() {
     let dataset = NdDataset::with_text("empty", &NdText::new().text());
     let message = open_refusal(&dataset);
     assert!(message.contains("none of the image files"), "{message}");
+}
+
+#[test]
+fn a_dataset_that_declares_a_million_wavelengths_is_refused() {
+    // A ten-line file declares a million channels: it is refused before a million names are built.
+    let text = "\"NDInfoFile\", Version 1.0\n\"DoWave\", TRUE\n\"NWavelengths\", 1000000\n\
+                \"DoStage\", TRUE\n\"NStagePositions\", 1000000\n\"EndFile\"\n";
+    let dataset = NdDataset::with_text("hostile", text);
+    let message = open_refusal(&dataset);
+    assert!(message.contains("NWavelengths"), "{message}");
+    assert!(message.contains("32"), "{message}");
+}
+
+#[test]
+fn a_corrupt_image_file_is_refused_by_its_name_and_the_dataset_opens() {
+    let dataset = NdDataset::with_text("corrupt", &cube_text());
+    std::fs::write(
+        dataset.join("dataset_w1DAPI_s1_t1.TIF"),
+        b"not a TIFF at all",
+    )
+    .expect("write the corrupt file");
+    dataset.write_tiff("dataset_w1DAPI_s1_t2.TIF", 3, 2, 1);
+    let reader = NdReader::open(&dataset.join("dataset.nd")).expect("the dataset opens");
+
+    let message = plane_refusal(&reader, 0, 0, 0, 0);
+    assert!(message.contains("dataset_w1DAPI_s1_t1.TIF"), "{message}");
+    assert!(
+        reader.plane(0, 1, 0, 0).is_ok(),
+        "the file that reads is still served"
+    );
 }
 
 #[test]

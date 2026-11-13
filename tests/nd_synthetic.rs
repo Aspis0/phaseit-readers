@@ -7,9 +7,11 @@
 
 mod support;
 
+use std::path::{Path, PathBuf};
+
 use phasit_imread::nd_reader::NdReader;
-use phasit_imread::types::Dims5;
-use phasit_imread::{DType, Error, ImageReader, PlaneBuf};
+use phasit_imread::types::{Box3, Dims5};
+use phasit_imread::{detect_format, DType, Error, Format, ImageReader, PlaneBuf};
 
 use support::nd::{plane_samples, NdDataset, NdText};
 use support::tiff_page::Pattern;
@@ -265,4 +267,83 @@ fn a_plane_outside_the_scene_is_refused_without_a_panic() {
             "t={t} c={c}"
         );
     }
+}
+
+/// The current directory, restored when it is dropped.
+struct CurrentDir(PathBuf);
+
+impl Drop for CurrentDir {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+#[test]
+fn a_dataset_opens_by_a_bare_name_in_the_current_directory() {
+    let dataset = NdDataset::with_text("bare", &NdText::new().text());
+    dataset.write_tiff("dataset.TIF", 4, 3, 7);
+    let previous = std::env::current_dir().expect("the current directory");
+    let _guard = CurrentDir(previous);
+    std::env::set_current_dir(&*dataset).expect("enter the dataset directory");
+
+    let reader = NdReader::open(Path::new("dataset.nd")).expect("open the dataset by its bare name");
+    assert_eq!(reader.meta().scene_count(), 1);
+    assert_eq!(
+        reader.plane(0, 0, 0, 0).expect("the plane").data,
+        PlaneBuf::U8(vec![7; 12])
+    );
+}
+
+#[test]
+fn a_file_that_opens_with_a_byte_order_mark_is_read() {
+    let dataset = NdDataset::with_text("bom", &NdText::new().text());
+    dataset.write_tiff("dataset.TIF", 4, 3, 7);
+    let path = dataset.join("dataset.nd");
+    let mut bytes = vec![0xEF, 0xBB, 0xBF];
+    bytes.extend_from_slice(&std::fs::read(&path).expect("read the .nd file"));
+    std::fs::write(&path, bytes).expect("write the .nd file with its mark");
+    assert_eq!(
+        detect_format(&path).expect("the format"),
+        Format::MetaMorphNd,
+        "the detection tolerates the mark"
+    );
+
+    let reader = NdReader::open(&path).expect("open the dataset");
+    assert_eq!(reader.meta().scene_count(), 1);
+}
+
+#[test]
+fn a_colour_file_publishes_its_samples_per_pixel() {
+    let dataset = NdDataset::with_text("rgb", &cube_text());
+    dataset.write_tiff_rgb("dataset_w1DAPI_s1_t1.TIF", 3, 2);
+    let reader = NdReader::open(&dataset.join("dataset.nd")).expect("open the dataset");
+
+    let scene = reader.meta().scene(0).expect("the scene");
+    assert_eq!(scene.samples, 3, "the samples come from the image file");
+    let volume = reader
+        .volume(0, 0, 0, Box3::new(0, 0, 0, 3, 2, 1))
+        .expect("the volume of the colour file");
+    assert_eq!(volume.samples, 3, "the volume holds the samples of the file");
+}
+
+#[test]
+fn the_z_step_is_published_when_the_first_file_states_no_pixel_size() {
+    // A plain TIFF states no resolution, so the z step of the `.nd` file stands on its own.
+    let text = NdText::new().key("ZStepSize", "0.25").text();
+    let dataset = NdDataset::with_text("zstep", &text);
+    dataset.write_tiff("dataset.TIF", 3, 2, 1);
+    let reader = NdReader::open(&dataset.join("dataset.nd")).expect("open the dataset");
+
+    let scene = reader.meta().scene(0).expect("the scene");
+    let px = scene.px_size_um.expect("the z step is published");
+    assert_eq!(px.z, Some(0.25), "the z step of the .nd file is published");
+    assert_eq!(px.x, 0.0, "the file states no pixel size");
+    assert!(
+        scene
+            .notes
+            .iter()
+            .any(|note| note.contains("no pixel size")),
+        "{:?}",
+        scene.notes
+    );
 }
