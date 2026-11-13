@@ -17,6 +17,26 @@ pub const MAX_SCENE_DIM: usize = 1_000_000;
 /// is refused with the same sentence by both, never mistaken for another format.
 pub const MAX_ATTRIBUTES_BYTES: u64 = 1024 * 1024;
 
+/// Largest MetaMorph `.nd` file a reader reads (1 MiB): the file lists an acquisition, not pixels, so a real one
+/// is a few kilobytes; a larger file is refused before it is read.
+pub const MAX_ND_FILE_BYTES: u64 = 1024 * 1024;
+
+/// Largest number of planes a MetaMorph `.nd` dataset may declare (stage positions x wavelengths x time points x
+/// z steps): no real acquisition holds a million of them, and the product is what a reader has to open.
+pub const MAX_ND_PLANES: usize = 1_000_000;
+
+/// Largest number of wavelengths a MetaMorph `.nd` dataset may declare (32): an acquisition carries a handful of
+/// stains, and every wavelength is a channel a reader publishes and a file name it builds.
+pub const MAX_ND_WAVELENGTHS: usize = 32;
+
+/// Largest number of stage positions, time points or z steps a MetaMorph `.nd` dataset may declare (4096): a long
+/// timelapse or a deep z-series reaches it, and the vectors a reader builds per axis stay small.
+pub const MAX_ND_AXIS_LEN: usize = 4096;
+
+/// Largest number of files a MetaMorph `.nd` dataset's directory may hold (100 000): the listing is read into
+/// memory, and an acquisition folder holds thousands of files, not millions.
+pub const MAX_ND_LISTING_ENTRIES: usize = 100_000;
+
 /// Byte size of one plane, refused on overflow or above [`MAX_DECODED_PLANE_BYTES`]; call it BEFORE allocating.
 pub fn checked_plane_alloc(dims: &Dims5, dtype: DType) -> Result<usize> {
     dims.checked_plane_bytes(dtype)

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Rust reader for TIFF/OME-TIFF, LSM, LIF, CZI, ND2, MRC2014, DeltaVision, ICS/IDS, MetaMorph STK and N5, offline and
-//! in-process.
+//! Rust reader for TIFF/OME-TIFF, LSM, LIF, CZI, ND2, MRC2014, DeltaVision, ICS/IDS, MetaMorph STK, MetaMorph ND
+//! and N5, offline and in-process.
 //! Contract: [`types`], axis **TCZYX**.
 //! [`detect`] sniffs the format, [`open`] dispatches, [`guard`] holds the guardrails; OIB and OIF have no reader yet.
 //!
@@ -31,6 +31,7 @@ pub mod lsm_reader;
 pub mod mrc_reader;
 pub mod n5_reader;
 pub mod nd2_reader;
+pub mod nd_reader;
 pub mod stk_reader;
 pub mod tiff_calibration;
 pub mod tiff_reader;
