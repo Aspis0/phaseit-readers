@@ -29,7 +29,13 @@ mod tests {
 
     #[test]
     fn normal_plane_passes() {
-        let dims = Dims5 { t: 1, c: 1, z: 1, y: 2048, x: 2048 };
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 2048,
+            x: 2048,
+        };
         let bytes = checked_plane_alloc(&dims, DType::U16).unwrap();
         assert_eq!(bytes, 2048 * 2048 * 2);
         assert!(bytes <= MAX_DECODED_PLANE_BYTES);
@@ -37,7 +43,13 @@ mod tests {
 
     #[test]
     fn oversized_plane_refused() {
-        let dims = Dims5 { t: 1, c: 1, z: 1, y: 100_000, x: 100_000 };
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 100_000,
+            x: 100_000,
+        };
         match checked_plane_alloc(&dims, DType::F32) {
             Err(Error::OversizedAllocation { requested, cap }) => {
                 assert_eq!(cap, MAX_DECODED_PLANE_BYTES);
@@ -49,7 +61,13 @@ mod tests {
 
     #[test]
     fn overflow_does_not_panic() {
-        let dims = Dims5 { t: 1, c: 1, z: 1, y: usize::MAX, x: 2 };
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: usize::MAX,
+            x: 2,
+        };
         match checked_plane_alloc(&dims, DType::U8) {
             Err(Error::OversizedAllocation { requested, cap }) => {
                 assert_eq!(requested, usize::MAX);
