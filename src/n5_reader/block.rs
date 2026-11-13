@@ -62,8 +62,7 @@ impl Block {
     }
 }
 
-/// The block file at `path`: the fixed-size header is read alone and checked, then at most the stored bytes
-/// the header and the compression allow are read, then the payload is inflated to exactly what it promises.
+/// The block file at `path`: the header is read alone and checked, then only the stored bytes it allows.
 pub(super) fn read(
     path: &Path,
     block_size: &[usize],
@@ -92,8 +91,7 @@ pub(super) fn read(
     decode(&header, &stored, compression, dtype)
 }
 
-/// The stored bytes a block file may hold: raw is exactly the payload; a compressed stream of it runs a few
-/// bytes longer, and 64 KiB of slack covers that without buffering a file past its own payload.
+/// Raw is exactly the payload; a compressed stream of it can run a few bytes longer: 64 KiB of slack covers it.
 fn stored_cap(compression: Compression, expected: usize) -> usize {
     match compression {
         Compression::None => expected,
@@ -146,8 +144,7 @@ fn extent(axis: usize, stated: u64, block_size: &[usize], edge: &[usize]) -> Res
     }
 }
 
-/// The block's bytes, inflated to the count its own header states: a payload that holds another block's samples
-/// (or none) is refused rather than read as this block's.
+/// Inflated to exactly the count its own header states: another block's samples (or none) are refused, not read.
 pub(super) fn decode(
     header: &BlockHeader,
     stored: &[u8],
@@ -284,14 +281,19 @@ mod tests {
 
     /// The samples 1..=6 as big-endian u16, stored the three ways.
     fn stored(compression: Compression) -> Vec<u8> {
-        let raw: Vec<u8> = [1u16, 2, 3, 4, 5, 6].iter().flat_map(|v| v.to_be_bytes()).collect();
+        let raw: Vec<u8> = [1u16, 2, 3, 4, 5, 6]
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect();
         match compression {
             Compression::None => raw,
             Compression::Gzip => {
                 use flate2::write::GzEncoder;
                 use std::io::Write;
                 let mut out = Vec::new();
-                GzEncoder::new(&mut out, flate2::Compression::default()).write_all(&raw).unwrap();
+                GzEncoder::new(&mut out, flate2::Compression::default())
+                    .write_all(&raw)
+                    .unwrap();
                 out
             }
             Compression::Zstd => ruzstd::encoding::compress_to_vec(
@@ -330,7 +332,9 @@ mod tests {
     #[test]
     fn a_block_of_two_planes_holds_the_second_after_the_first() {
         // A 3-D block's samples run plane after plane: row (1, 0) is the first row of the second plane.
-        let header = BlockHeader { size: vec![3, 2, 2] };
+        let header = BlockHeader {
+            size: vec![3, 2, 2],
+        };
         let raw: Vec<u8> = (1u16..=12).flat_map(|v| v.to_be_bytes()).collect();
         let decoded = decode(&header, &raw, Compression::None, DType::U16).unwrap();
         assert_eq!(decoded.shape(), [3, 2, 2]);
@@ -349,7 +353,9 @@ mod tests {
         let raw = [1, 0, 2, 0, 3, 0];
         let long = [1, 0, 2, 0, 3, 0, 4, 0];
         for (payload, name) in [(&raw[..5], "short"), (&long[..], "long")] {
-            let error = decode(&header, payload, Compression::None, DType::U16).err().expect(name);
+            let error = decode(&header, payload, Compression::None, DType::U16)
+                .err()
+                .expect(name);
             assert!(
                 matches!(error, Error::Decode(ref message) if message.contains("not the 6")),
                 "{name}: {error}"
@@ -357,9 +363,14 @@ mod tests {
         }
         for compression in [Compression::Gzip, Compression::Zstd] {
             let payload = stored(compression);
-            let error = decode(&header, &payload[..payload.len() - 1], compression, DType::U16)
-                .err()
-                .expect("cut");
+            let error = decode(
+                &header,
+                &payload[..payload.len() - 1],
+                compression,
+                DType::U16,
+            )
+            .err()
+            .expect("cut");
             assert!(
                 matches!(error, Error::Decode(_)),
                 "{}: {error}",
@@ -370,17 +381,19 @@ mod tests {
 
     #[test]
     fn a_block_priced_past_the_ceiling_is_refused_before_anything_is_reserved() {
-        // Every extent is legal against its blockSize; the 4 TB they promise is refused in process, before
-        // the 32-byte payload is read.
+        // Every extent is legal against its blockSize; the 4 TB they promise is refused before the payload is read.
         let header = BlockHeader {
             size: vec![2000, 2000, 1_000_000],
         };
         let error = decode(&header, &[0u8; 32], Compression::Gzip, DType::U8)
             .err()
             .expect("over the ceiling");
-        assert!(
-            matches!(error, Error::OversizedAllocation { requested: 4_000_000_000_000, .. }),
-            "{error}"
+        let Error::OversizedAllocation { requested, cap } = error else {
+            panic!("over the ceiling: {error}")
+        };
+        assert_eq!(
+            (requested, cap),
+            (4_000_000_000_000, MAX_DECODED_PLANE_BYTES)
         );
     }
 }
