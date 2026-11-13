@@ -73,19 +73,23 @@ pub(super) fn scale(buf: &[u8], uic1: Option<Entry>, endian: Endian) -> Scale {
     let mut x = None;
     let mut y = None;
     let mut units = None;
-    for pair in 0..uic1.count {
-        // The pairs from the first one outside the file onwards are outside it too.
+    // A count past the end of the file names pairs that are not there: the table is as long as the file can hold.
+    for pair in 0..uic1.count.min(buf.len().saturating_sub(uic1.at) / 8) {
         let Some((id, value)) = pair_at(buf, uic1.at, pair, endian) else {
             break;
         };
         match id {
             X_CALIBRATION => x = rational(buf, value, endian),
             Y_CALIBRATION => y = rational(buf, value, endian),
-            CALIBRATION_UNITS => units = text(buf, value, endian),
+            CALIBRATION_UNITS => units = unit_factor(buf, value, endian),
             _ => {}
         }
+        // These three are the only values the scale needs: the rest of the table is not worth the walk.
+        if x.is_some() && y.is_some() && units.is_some() {
+            break;
+        }
     }
-    let Some(um_per_unit) = units.as_deref().and_then(um_per_unit) else {
+    let Some(um_per_unit) = units else {
         return Scale::none();
     };
     Scale {
@@ -132,19 +136,20 @@ fn rational(buf: &[u8], at: usize, endian: Endian) -> Option<f64> {
     }
 }
 
-/// The string at byte `at`: a uint32 length, then that many ASCII bytes.
-fn text(buf: &[u8], at: usize, endian: Endian) -> Option<String> {
+/// µm per unit for the name at byte `at`: a uint32 length, then that many ASCII bytes.
+/// The name is read in place and capped: no unit is this long, and copying a crafted one would price the open.
+fn unit_factor(buf: &[u8], at: usize, endian: Endian) -> Option<f64> {
     let len = ifd::u32_at(buf, at, endian).ok()? as usize;
+    if len > MAX_UNIT_BYTES {
+        return None;
+    }
     let start = at.checked_add(4)?;
-    let raw = buf.get(start..start.checked_add(len)?)?;
-    Some(
-        std::str::from_utf8(raw)
-            .ok()?
-            .trim_matches('\0')
-            .trim()
-            .to_string(),
-    )
+    let raw = std::str::from_utf8(buf.get(start..start.checked_add(len)?)?).ok()?;
+    um_per_unit(raw.trim_matches('\0').trim())
 }
+
+/// The longest CalibrationUnits name this reader reads; a longer one is no unit it knows.
+const MAX_UNIT_BYTES: usize = 64;
 
 /// µm per CalibrationUnits name. A name outside this table states no scale: MetaMorph writes several (inches, feet,
 /// angstroms, ...) and a guessed factor would publish a wrong distance instead of none.

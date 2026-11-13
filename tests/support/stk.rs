@@ -26,6 +26,9 @@ const TAG_SAMPLE_FORMAT: u16 = 339;
 /// Bytes of one UIC2 plane record.
 const RECORD_BYTES: usize = 24;
 
+/// An offset past the end of any file these tests write.
+const PAST_END: u32 = u32::MAX;
+
 /// How UIC2 declares its plane table: real files use both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Uic2Type {
@@ -38,6 +41,7 @@ pub enum Uic2Type {
 pub enum Uic1Value {
     Rational(u32, u32),
     Text(String),
+    /// The entry's value offset points past the end of the file.
     PastEnd,
 }
 
@@ -58,6 +62,8 @@ pub struct StkFile {
     pub uic2_at: Option<u32>,
     /// The UIC1 entries in file order; `None` writes no UIC1 at all.
     pub uic1: Option<Vec<(u32, Uic1Value)>>,
+    /// How many times the UIC1 list is written, every copy pointing at the same values.
+    pub uic1_repeat: usize,
     /// Planes whose bytes are written; `None` writes them all.
     pub planes_written: Option<usize>,
     pub compression: u16,
@@ -74,7 +80,6 @@ struct Places {
     uic1_values: Vec<u32>,
     strip_table: u32,
     plane_data: u32,
-    past_end: u32,
 }
 
 impl StkFile {
@@ -105,6 +110,7 @@ impl StkFile {
                 (5, Uic1Value::Rational(1, 4)),
                 (6, Uic1Value::Text("um".to_string())),
             ]),
+            uic1_repeat: 1,
             planes_written: None,
             compression: 1,
             samples_per_pixel: 1,
@@ -163,6 +169,8 @@ impl StkFile {
             }
         };
         let (offsets, counts) = self.strip_table(places.plane_data);
+        // The byte-count table follows the offset table: both hold one LONG per strip.
+        let counts_at = places.strip_table + 4 * self.strips() as u32;
         let mut entries = vec![
             long(TAG_IMAGE_WIDTH, 1, self.width),
             long(TAG_IMAGE_LENGTH, 1, self.height),
@@ -172,19 +180,19 @@ impl StkFile {
             strip(TAG_STRIP_OFFSETS, offsets, places.strip_table),
             short(TAG_SAMPLES_PER_PIXEL, self.samples_per_pixel),
             short(TAG_ROWS_PER_STRIP, self.rows() as u16),
-            strip(
-                TAG_STRIP_BYTE_COUNTS,
-                counts,
-                table_at(places, self.strips()),
-            ),
+            strip(TAG_STRIP_BYTE_COUNTS, counts, counts_at),
             short(TAG_SAMPLE_FORMAT, self.sample_format),
         ];
         if let Some(pairs) = &self.uic1 {
-            entries.push((UIC1, TYPE_LONG, pairs.len() as u32, places.uic1_pairs));
+            entries.push((UIC1, TYPE_LONG, self.uic1_pairs() as u32, places.uic1_pairs));
         }
+        let uic2_kind = match self.uic2_type {
+            Uic2Type::Long => TYPE_LONG,
+            Uic2Type::Rational => TYPE_RATIONAL,
+        };
         entries.push((
             UIC2,
-            self.uic2_kind(),
+            uic2_kind,
             self.uic2_records() as u32,
             self.uic2_at.unwrap_or(places.uic2),
         ));
@@ -208,7 +216,6 @@ impl StkFile {
         (offsets, counts)
     }
 
-    /// The file's length is the plane data plus what is written after it, so the past-the-end offset is known here.
     fn places(&self, entries: usize) -> Places {
         let strips = self.strips();
         let row_bytes = self.width as usize * (self.bits as usize / 8);
@@ -223,7 +230,7 @@ impl StkFile {
 
         at = align2(at);
         let uic1_pairs = at as u32;
-        at += 8 * self.uic1.as_ref().map_or(0, |entries| entries.len());
+        at += 8 * self.uic1_pairs();
         let mut uic1_values = Vec::new();
         if let Some(pairs) = &self.uic1 {
             for (_, value) in pairs {
@@ -242,18 +249,13 @@ impl StkFile {
         at += 2 * table_bytes;
 
         let plane_data = align2(at) as u32;
-        let written = self.planes_written.unwrap_or(self.planes);
-        let file_len = plane_data as usize
-            + plane_bytes
-            + self.strip_gap as usize * (strips - 1)
-            + plane_bytes * (written.saturating_sub(1));
+        let _ = plane_bytes;
         Places {
             uic2,
             uic1_pairs,
             uic1_values,
             strip_table,
             plane_data,
-            past_end: file_len as u32 + 64,
         }
     }
 
@@ -261,15 +263,15 @@ impl StkFile {
         10 + usize::from(self.uic1.is_some()) + 1
     }
 
-    fn uic2_records(&self) -> usize {
-        self.uic2_count.unwrap_or(self.planes as u32) as usize
+    /// How many `(id, value)` pairs the UIC1 table holds.
+    fn uic1_pairs(&self) -> usize {
+        self.uic1
+            .as_ref()
+            .map_or(0, |pairs| pairs.len() * self.uic1_repeat)
     }
 
-    fn uic2_kind(&self) -> u16 {
-        match self.uic2_type {
-            Uic2Type::Long => TYPE_LONG,
-            Uic2Type::Rational => TYPE_RATIONAL,
-        }
+    fn uic2_records(&self) -> usize {
+        self.uic2_count.unwrap_or(self.planes as u32) as usize
     }
 
     /// Rows of one strip of plane 0; a strip count of one means the whole plane.
@@ -296,13 +298,15 @@ impl StkFile {
         let Some(pairs) = &self.uic1 else {
             return;
         };
-        for (index, (id, value)) in pairs.iter().enumerate() {
-            let at = match value {
-                Uic1Value::PastEnd => places.past_end,
-                _ => places.uic1_values[index],
-            };
-            self.put(out, *id, 4);
-            self.put(out, at, 4);
+        for _ in 0..self.uic1_repeat {
+            for (index, (id, value)) in pairs.iter().enumerate() {
+                let at = match value {
+                    Uic1Value::PastEnd => PAST_END,
+                    _ => places.uic1_values[index],
+                };
+                self.put(out, *id, 4);
+                self.put(out, at, 4);
+            }
         }
         for (_, value) in pairs {
             match value {
@@ -380,11 +384,6 @@ impl StkFile {
 /// The sample the builder writes for plane `plane` at `(y, x)`; x is the fastest axis.
 pub fn sample_at(plane: usize, y: u32, x: u32) -> u16 {
     (plane * 1000 + y as usize * 10 + x as usize) as u16
-}
-
-/// Where the second of plane 0's two strip tables starts; the first is at `places.strip_table`.
-fn table_at(places: &Places, strips: usize) -> u32 {
-    places.strip_table + 4 * strips as u32
 }
 
 fn align2(at: usize) -> usize {

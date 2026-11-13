@@ -321,3 +321,31 @@ fn an_stk_without_uic2_is_refused_with_the_stk_sentence() {
         Ok(_) => panic!("the file opened"),
     }
 }
+
+#[test]
+fn a_uic1_table_that_repeats_one_long_unit_name_opens_at_once() {
+    // The audit's hostile file: 16 384 pairs, every one an id-6 entry pointing at one 1 MiB name. A per-pair copy of
+    // the name prices the open by pairs x name; reading it once, capped, does not.
+    let file = StkFile {
+        uic1: Some(vec![(6, Uic1Value::Text("a".repeat(1 << 20)))]),
+        uic1_repeat: 1 << 14,
+        ..StkFile::u16(5, 3, 2)
+    };
+    let path = scratch("units_spam", "stk");
+    file.write(&path);
+
+    let started = std::time::Instant::now();
+    let reader = StkReader::open(&path).expect("open the hostile UIC1");
+    let elapsed = started.elapsed();
+    let scene = reader.meta().scene(0).unwrap();
+    assert_eq!(scene.dims.z, 2);
+    assert_eq!(
+        scene.px_size_um, None,
+        "a 1 MiB name is no unit this reader knows"
+    );
+    println!("open of the hostile UIC1 took {elapsed:?}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "the open took {elapsed:?}"
+    );
+}
