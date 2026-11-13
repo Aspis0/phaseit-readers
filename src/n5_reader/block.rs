@@ -11,6 +11,7 @@ use flate2::read::GzDecoder;
 use ruzstd::decoding::StreamingDecoder;
 
 use crate::error::{Error, Result};
+use crate::guard::MAX_DECODED_PLANE_BYTES;
 use crate::types::DType;
 
 use super::attributes::Compression;
@@ -135,12 +136,7 @@ pub(super) fn decode(
     dtype: DType,
 ) -> Result<Block> {
     let sample_bytes = dtype.size_bytes();
-    let bytes = header
-        .size
-        .iter()
-        .try_fold(1usize, |total, extent| total.checked_mul(*extent))
-        .and_then(|elements| elements.checked_mul(sample_bytes))
-        .ok_or_else(|| Error::Parse("N5 block size overflows usize".to_string()))?;
+    let bytes = priced(&header.size, sample_bytes)?;
     Ok(Block {
         shape: [
             header.size[0],
@@ -150,6 +146,23 @@ pub(super) fn decode(
         bytes: inflate(stored, compression, bytes)?,
         sample_bytes,
     })
+}
+
+/// The bytes a block's header promises: every extent priced in and capped through the guard before anything is
+/// reserved. A 3-D block is the smallest unit the reader decodes, so its z extent counts against the ceiling too.
+fn priced(size: &[usize], sample_bytes: usize) -> Result<usize> {
+    let bytes = size
+        .iter()
+        .try_fold(1usize, |total, extent| total.checked_mul(*extent))
+        .and_then(|elements| elements.checked_mul(sample_bytes))
+        .ok_or_else(|| Error::Parse("N5 block size overflows usize".to_string()))?;
+    if bytes > MAX_DECODED_PLANE_BYTES {
+        return Err(Error::OversizedAllocation {
+            requested: bytes,
+            cap: MAX_DECODED_PLANE_BYTES,
+        });
+    }
+    Ok(bytes)
 }
 
 /// The payload inflated to exactly `expected` bytes: a stream of any other length is refused, so a decompression
@@ -350,5 +363,22 @@ mod tests {
                 compression.name()
             );
         }
+    }
+
+    #[test]
+    fn a_block_priced_past_the_ceiling_is_refused_before_anything_is_reserved() {
+        // Every extent is legal against its blockSize; the 4 TB they promise is refused in process, before
+        // the 32-byte payload is read.
+        let header = BlockHeader {
+            size: vec![2000, 2000, 1_000_000],
+            len: 16,
+        };
+        let error = decode(&header, &[0u8; 32], Compression::Gzip, DType::U8)
+            .err()
+            .expect("over the ceiling");
+        assert!(
+            matches!(error, Error::OversizedAllocation { requested: 4_000_000_000_000, .. }),
+            "{error}"
+        );
     }
 }
