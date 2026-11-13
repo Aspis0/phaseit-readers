@@ -107,7 +107,6 @@ pub fn detect_from(header: &[u8], name: Option<&str>) -> Result<Format> {
         "mrc" | "mrcs" | "rec" | "st" | "map" | "ali" => Ok(Format::Mrc),
         "dv" | "r3d" => Ok(Format::Dv),
         "ics" | "ids" => Ok(Format::Ics),
-        "stk" => Ok(Format::Stk),
         "tif" | "tiff" if is_ome => Ok(Format::OmeTiff),
         "tif" | "tiff" => Ok(Format::Tiff),
         other => Err(Error::Unsupported(format!(
@@ -256,8 +255,15 @@ mod tests {
 
     #[test]
     fn stk_by_extension_and_tiff_magic() {
-        assert_eq!(detect_from(b"", Some("stack.stk")).unwrap(), Format::Stk);
-        assert_eq!(detect_from(b"", Some("stack.STK")).unwrap(), Format::Stk);
+        // An STK is a classic TIFF: the name alone, with no TIFF magic, is not one.
+        assert!(matches!(
+            detect_from(b"", Some("stack.stk")),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            detect_from(b"", Some("stack.STK")),
+            Err(Error::Unsupported(_))
+        ));
         assert_eq!(
             detect_from(b"II\x2A\x00", Some("stack.stk")).unwrap(),
             Format::Stk

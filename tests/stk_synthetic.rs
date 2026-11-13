@@ -256,13 +256,13 @@ fn every_stk_name_is_detected_and_a_tif_named_stk_opens_as_an_stack() {
     for extension in ["stk", "STK"] {
         let name = format!("stack.{extension}");
         assert_eq!(
-            detect_from(b"", Some(&name)).unwrap(),
+            detect_from(b"II\x2A\x00", Some(&name)).unwrap(),
             Format::Stk,
             "{name}"
         );
-        assert_eq!(
-            detect_from(b"II\x2A\x00", Some(&name)).unwrap(),
-            Format::Stk,
+        // The name alone is not an STK: the format is a classic TIFF, so a header with no TIFF magic is not one.
+        assert!(
+            matches!(detect_from(b"", Some(&name)), Err(Error::Unsupported(_))),
             "{name}"
         );
     }

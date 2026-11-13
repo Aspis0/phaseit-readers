@@ -115,7 +115,7 @@ fn pair_at(buf: &[u8], at: usize, pair: usize, endian: Endian) -> Option<(u32, u
 }
 
 /// The rational at byte `at`, `None` when it is absent or its denominator is 0.
-fn rational(buf: &[u8], at: usize, endian: Endian) -> Option<f64> {
+pub(super) fn rational(buf: &[u8], at: usize, endian: Endian) -> Option<f64> {
     let numerator = ifd::u32_at(buf, at, endian).ok()? as f64;
     let denominator = ifd::u32_at(buf, at.checked_add(4)?, endian).ok()? as f64;
     if denominator == 0.0 {

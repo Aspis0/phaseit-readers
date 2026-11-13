@@ -133,3 +133,14 @@ fn a_uic2_table_shorter_than_its_plane_records_is_refused() {
         assert!(message.contains("past the end"), "{message}");
     }
 }
+
+#[test]
+fn a_strip_run_that_does_not_cover_plane_0_is_refused() {
+    // One byte short of the 30 a 5x3 16-bit plane needs: contiguous, and still not the plane.
+    let file = StkFile {
+        strip_bytes_short: 1,
+        ..StkFile::u16(5, 3, 2)
+    };
+    let message = refusal(&file, "short_run");
+    assert!(message.contains("cover"), "{message}");
+}

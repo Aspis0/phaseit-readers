@@ -8,7 +8,7 @@ use crate::types::{DType, Dims5, Endian};
 use super::geometry::Geometry;
 use super::ifd::{self, Entry, UIC1, UIC2};
 use super::layout::layout;
-use super::uic::{plane_count, scale};
+use super::uic::{plane_count, rational, scale};
 
 /// A classic TIFF whose first IFD sits at byte 8 and holds `(tag, kind, count, value)`, where a value that does not
 /// fit in the entry is an offset.
@@ -230,15 +230,33 @@ fn a_uic1_table_outside_the_file_is_ignored() {
     assert_eq!((scale.x_um, scale.y_um), (None, None));
 }
 
+/// A rational at byte 0 of its own buffer.
+fn rational_bytes(numerator: u32, denominator: u32) -> (Vec<u8>, usize) {
+    let mut buf = vec![0u8; 8];
+    buf[0..4].copy_from_slice(&numerator.to_le_bytes());
+    buf[4..8].copy_from_slice(&denominator.to_le_bytes());
+    (buf, 0)
+}
+
 #[test]
 fn a_zero_denominator_is_not_a_distance() {
+    // The rational itself is refused, not filtered later: the value must not become a distance to drop.
+    let (buf, at) = rational_bytes(1, 0);
+    assert!(
+        rational(&buf, at, Endian::Little).is_none(),
+        "a zero denominator is no rational"
+    );
     let (buf, entry) = uic1(&[(4, Uic::Rational(1, 0)), (6, Uic::Text("um"))]);
-    assert_eq!(scale(&buf, Some(entry), Endian::Little).x_um, None);
+    assert_eq!(
+        scale(&buf, Some(entry), Endian::Little).x_um,
+        None,
+        "and the axis stays unpublished"
+    );
 }
 
 #[test]
 fn the_planes_follow_plane_0_with_no_gap() {
-    let geometry = geometry(5, 3, &[1024, 1024 + 30], &[30, 30]);
+    let geometry = geometry(5, 3, &[1024], &[30]);
     let layout = layout(&geometry, 4, 1024 + 4 * 30).unwrap();
     assert_eq!(
         layout.dims,
@@ -257,7 +275,8 @@ fn the_planes_follow_plane_0_with_no_gap() {
 
 #[test]
 fn strips_that_do_not_touch_are_refused() {
-    let geometry = geometry(5, 3, &[1024, 1100], &[30, 30]);
+    // Two 15-byte strips with a gap between them: a 5x3 16-bit plane is 30 bytes.
+    let geometry = geometry(5, 3, &[1024, 1100], &[15, 15]);
     assert!(matches!(
         layout(&geometry, 2, 4096),
         Err(Error::Unsupported(message)) if message.contains("not contiguous")

@@ -52,6 +52,8 @@ pub struct StkFile {
     pub rows_per_strip: Option<u32>,
     /// Bytes written between two strips of plane 0; 0 writes them contiguous.
     pub strip_gap: u32,
+    /// Bytes the last strip declares fewer than it holds; 0 writes the true count.
+    pub strip_bytes_short: u32,
     pub uic2_type: Uic2Type,
     /// UIC2 count override; `None` writes `planes`.
     pub uic2_count: Option<u32>,
@@ -99,6 +101,7 @@ impl StkFile {
             big_endian: false,
             rows_per_strip: None,
             strip_gap: 0,
+            strip_bytes_short: 0,
             uic2_type: Uic2Type::Long,
             uic2_count: None,
             uic2_at: None,
@@ -208,7 +211,9 @@ impl StkFile {
             offsets.push(plane_data + (strip * stride) as u32);
             let first = strip * rows;
             let last = (first + rows).min(self.height as usize);
-            counts.push(((last - first) * row_bytes) as u32);
+            // A short run keeps its offsets: only the last strip declares fewer bytes than it holds.
+            let short = u32::from(strip + 1 == self.strips()) * self.strip_bytes_short;
+            counts.push(((last - first) * row_bytes) as u32 - short);
         }
         (offsets, counts)
     }
