@@ -16,6 +16,7 @@ no network. GPL-free (see `THIRD-PARTY-NOTICES.md`).
 | MRC2014 | ⚠️ one scene; MODE 1, 2 and 6 only; ISPG 0, 1–230 or 401–630 |
 | DeltaVision | ⚠️ one scene; MODE 0, 1, 2 and 6 only; ImgSequence 0, 1 or 2; W ≤ 5 |
 | ICS/IDS | ⚠️ one scene; versions 1.0 and 2.0; uncompressed and gzip; U8, U16, I16 and F32 |
+| MetaMorph ND (`.nd`) | ⚠️ a `.nd` text file beside its image files; stage positions, wavelengths, time points and z steps |
 | N5 | ⚠️ one scene; 2-D (x, y) and 3-D (x, y, z); raw, gzip and zstd; U8, U16, I16 and F32 |
 | OIB · OIF (Olympus) | detected, `NotImplemented` |
 
@@ -125,8 +126,21 @@ rest rather than guess:
   published only when its own CalibrationUnits entry names a unit this reader converts (µm or
   nm); any other unit, no units entry and no UIC1 leave the scene uncalibrated, never guessed. A
   UIC1 entry whose offset is outside the file is ignored. The UIC2 z distance is not published:
-  what it measures varies between writers, and the MetaMorph `.nd` companion file is not read.
-  `region` is the trait default.
+  what it measures varies between writers; the MetaMorph `.nd` companion that names the
+  acquisition is read by the MetaMorph ND reader. `region` is the trait default.
+- **MetaMorph ND** (Molecular Devices) — a dataset is a `.nd` text file beside the
+  acquisition and one image file per (wavelength, stage position, time point). The
+  scenes are the stage positions, the channels the wavelengths, the time points the
+  time axis and the z steps the z-series. The image file of a plane is the `.nd`
+  file's own stem, then `_w<i>` (with the wavelength's name when `WaveInFileName`
+  states it), `_s<j>` and `_t<k>`, then `.STK` for a wavelength with a z-series and
+  `.TIF` for one without; the name is matched without regard to case. A wavelength
+  without a z-series holds ONE plane in a z-dataset: its second plane is refused,
+  never the first plane repeated. An image file the dataset directory does not hold
+  is refused by name (wavelength, stage position, time point) when its plane is
+  read, and an image file of another sample type or another size is refused by
+  name too. The pixel size comes from the dataset's first image file and the z step
+  from the `ZStepSize` of the `.nd` file. `region` is the trait default.
 - **N5** (Saalfeld lab / BigDataViewer) — one scene: a dataset is a directory
   holding `attributes.json` (or that file itself), and the block at `g0/g1/…` is
   one directory per axis but the last, which names the file. A block the dataset
