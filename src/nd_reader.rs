@@ -39,11 +39,7 @@ pub struct NdReader {
 
 impl ImageReader for NdReader {
     fn open(path: &Path) -> Result<Self> {
-        let text = decode(&read_capped(path)?);
-        let dataset = parse::parse(&text, &stem(path))?;
-        names::guard_names(&dataset)?;
-
-        let listing = Listing::read(dataset_directory(path), MAX_ND_LISTING_ENTRIES)?;
+        let (dataset, listing) = dataset_and_listing(path)?;
         let (reference, reader) = reference(&dataset, &listing)?;
         let geometry = geometry(reader.as_ref())?;
         let calibration = calibration(&dataset, reader.as_ref());
@@ -95,22 +91,49 @@ impl ImageReader for NdReader {
     }
 }
 
-/// The dataset's first image file that reads: a file that does not decode is skipped, so one corrupt member does
-/// not close the whole acquisition. When no file reads, the first failure is named.
-fn reference(dataset: &Dataset, listing: &Listing) -> Result<(PathBuf, Arc<dyn ImageReader>)> {
-    let mut first_error: Option<Error> = None;
+/// The image files of the MetaMorph `.nd` dataset at `path`: the files its planes are read from.
+///
+/// WHY it is public: a caller that keeps a copy of a dataset's pixels must know which files the
+/// dataset holds, so a change to one of them is seen. They are looked up in the dataset's own
+/// directory, so every one of them sits beside the `.nd` file.
+pub fn member_files(path: &Path) -> Result<Vec<PathBuf>> {
+    let (dataset, listing) = dataset_and_listing(path)?;
+    Ok(members(&dataset, &listing))
+}
+
+/// The dataset the `.nd` file states, and the files of the directory it sits in.
+fn dataset_and_listing(path: &Path) -> Result<(Dataset, Listing)> {
+    let text = decode(&read_capped(path)?);
+    let dataset = parse::parse(&text, &stem(path))?;
+    names::guard_names(&dataset)?;
+    let listing = Listing::read(dataset_directory(path), MAX_ND_LISTING_ENTRIES)?;
+    Ok((dataset, listing))
+}
+
+/// The files the dataset names that its directory holds: one per plane it can read.
+fn members(dataset: &Dataset, listing: &Listing) -> Vec<PathBuf> {
+    let mut found = Vec::new();
     for wave in 1..=dataset.waves.len() {
         for stage in 1..=dataset.stages.len() {
             for time in 1..=dataset.times {
                 let name = names::file_name(dataset, wave, stage, time);
-                let Some(path) = listing.find(&name) else {
-                    continue;
-                };
-                match sources::open_file(path) {
-                    Ok(reader) => return Ok((path.to_path_buf(), reader)),
-                    Err(error) => first_error = first_error.or(Some(error)),
+                if let Some(path) = listing.find(&name) {
+                    found.push(path.to_path_buf());
                 }
             }
+        }
+    }
+    found
+}
+
+/// The dataset's first image file that reads: a file that does not decode is skipped, so one corrupt member does
+/// not close the whole acquisition. When no file reads, the first failure is named.
+fn reference(dataset: &Dataset, listing: &Listing) -> Result<(PathBuf, Arc<dyn ImageReader>)> {
+    let mut first_error: Option<Error> = None;
+    for path in members(dataset, listing) {
+        match sources::open_file(&path) {
+            Ok(reader) => return Ok((path, reader)),
+            Err(error) => first_error = first_error.or(Some(error)),
         }
     }
     Err(first_error.unwrap_or_else(|| {
