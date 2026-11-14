@@ -143,7 +143,9 @@ rest rather than guess:
   alone: the dataset still opens and its other planes are served. The pixel size
   comes from the dataset's first image file and the z step from the `ZStepSize` of
   the `.nd` file; a first file that states no pixel size leaves the z step on its
-  own. `region` is the trait default.
+  own. Every image file of a dataset sits in the `.nd` file's own directory: a name
+  that would leave it is refused, so no member is ever opened from elsewhere.
+  `region` is the trait default.
 - **N5** (Saalfeld lab / BigDataViewer) — one scene: a dataset is a directory
   holding `attributes.json` (or that file itself), and the block at `g0/g1/…` is
   one directory per axis but the last, which names the file. A block the dataset
@@ -166,6 +168,7 @@ let meta = reader.meta();                     // ImageMeta { name, scenes: Vec<S
 let plane = reader.plane(scene, t, c, z)?;    // owned, native-endian Plane { data, shape:[y,x] }
 let refused = reader.refused_scenes();        // the scenes this reader refused, with their reason
 let index = reader.scene_file_index(scene);   // the scene's own position in the file
+let files = phasit_imread::nd_reader::member_files(path)?; // a MetaMorph .nd dataset's image files
 ```
 
 `meta.scenes` holds the readable scenes only; `reader.refused_scenes()` lists the
