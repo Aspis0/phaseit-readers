@@ -3,9 +3,7 @@
 //! An ImageJ description names the unit its resolution counts in; an inch resolution is a print resolution, and one
 //! with no absolute unit states no pixel size.
 
-use phasit_imread::tiff_calibration::{
-    calibration_from_tags, pixel_size_range_note, print_resolution_note,
-};
+use phasit_imread::tiff_calibration::{calibration_from_tags, print_resolution_note};
 use phasit_imread::PxSizeUm;
 
 /// The pixel size the tags state, when they state one; the notes on an unusable resolution are not under test here.
@@ -358,7 +356,12 @@ fn both_axes_out_of_range_are_named_separately() {
 /// A count the file states on one axis is one fact: the other axis takes its value, and it is named once.
 #[test]
 fn a_count_stated_on_one_axis_is_named_once() {
-    let calibration = calibration_from_tags(Some("ImageJ=1.54g\nunit=\u{b5}m\n"), Some(2_000.0), None, Some(1));
+    let calibration = calibration_from_tags(
+        Some("ImageJ=1.54g\nunit=\u{b5}m\n"),
+        Some(2_000.0),
+        None,
+        Some(1),
+    );
     assert_eq!(calibration.notes.len(), 1, "the count is named once");
     assert!(
         calibration.notes[0].contains("on X"),
@@ -367,12 +370,21 @@ fn a_count_stated_on_one_axis_is_named_once() {
     );
 }
 
-/// The wording of the note is pinned in the crate that owns it.
+/// The wording of the note is pinned where the note is made: the reader and the tests describe the
+/// size the file stated the same way.
 #[test]
 fn the_out_of_range_wording_is_pinned() {
+    let calibration = calibration_from_tags(
+        Some("ImageJ=1.54g\nunit=\u{b5}m\n"),
+        Some(2_000.0),
+        Some(13.0),
+        Some(1),
+    );
+    let expected = "the file states a resolution of 2000 per µm on X; 1 um per µm gives 0.0005 um/px, \
+                    outside the accepted range of 0.001 to 50 um/px, so the image is read uncalibrated";
     assert_eq!(
-        pixel_size_range_note("X", 2_000.0, "µm", 1.0, 0.0005),
-        "the file states a resolution of 2000 per µm on X; 1 um per µm gives 0.0005 um/px, outside the \
-         accepted range of 0.001 to 50 um/px, so the image is read uncalibrated"
+        calibration.notes,
+        vec![expected.to_string()],
+        "the note names the size the file states, the conversion and the range"
     );
 }

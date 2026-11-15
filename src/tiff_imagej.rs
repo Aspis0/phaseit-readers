@@ -13,7 +13,7 @@ pub struct ImageJLayout {
 }
 
 /// The stack shape an ImageJ description states, with the notes for the counts it read as one.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct StackShape {
     pub channels: usize,
     pub slices: usize,

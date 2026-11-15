@@ -35,7 +35,8 @@ struct StatedSize {
     axis: &'static str,
 }
 
-/// The pixel size in µm, plus the notes the calibration could not give; no default is invented, only INCH earns a note.
+/// The pixel size in µm, plus the notes the calibration could not give: no default is invented, and
+/// every count the file states is named.
 pub fn calibration_from_tags(
     description: Option<&str>,
     x_per_unit: Option<f64>,
@@ -88,9 +89,11 @@ pub fn calibration_from_tags(
 /// The scale a stated resolution is converted with: how many micrometres one unit of the file is, and
 /// the name the file gives that unit.
 ///
-/// WHY the description is a fallback: the description names the unit only where the ResolutionUnit tag
-/// names none: the tag is the file's own statement.
-fn scale_of(resolution_unit: Option<u16>, description: Option<&ImageJDescription>) -> Option<Scale> {
+/// WHY the description is a fallback: the tag is the file's own statement of the unit.
+fn scale_of(
+    resolution_unit: Option<u16>,
+    description: Option<&ImageJDescription>,
+) -> Option<Scale> {
     match resolution_unit {
         Some(RESOLUTION_UNIT_CENTIMETER) => Some(Scale {
             micrometers_per_unit: MICROMETERS_PER_CENTIMETER,
@@ -150,7 +153,7 @@ fn stated_size(count: f64, scale: &Scale, axis: &'static str) -> StatedSize {
 
 /// The note an out-of-range pixel size earns: the file states a size this reader cannot publish.
 /// Its wording lives here, once, so the reader and the tests describe the size the same way.
-pub fn pixel_size_range_note(
+fn pixel_size_range_note(
     axis: &str,
     count: f64,
     unit: &str,
@@ -244,13 +247,15 @@ fn imagej_description(description: &str) -> Option<ImageJDescription> {
         }
     }
     let unit = unit?;
-    let micrometers_per_unit = micrometers_per_unit(unit)?;
+    // The unit is read as the file writes it: a writer that cannot emit the micro sign leaves an escape.
+    let unit = unescape(unit);
+    let micrometers_per_unit = micrometers_per_unit(&unit)?;
     let spacing_um = spacing
         .filter(|value| value.is_finite() && *value > 0.0)
         .map(|value| value * micrometers_per_unit);
     Some(ImageJDescription {
         micrometers_per_unit,
-        unit: unit.to_string(),
+        unit,
         spacing_um,
     })
 }

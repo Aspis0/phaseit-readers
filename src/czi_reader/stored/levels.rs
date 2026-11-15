@@ -16,8 +16,8 @@ use super::attribution::{orphan_refusal, skips_of, unplaced_skips, Refusal};
 use super::coarse::Skipped;
 use super::coverage::{Area, Coverage};
 use super::grid::{
-    cell_of, covers_the_scene, extent_of, lattice_origin, overlap_of, tiles_fit_their_cells, Overlap,
-    MAX_CELL_COMPARISONS,
+    cell_of, covers_the_scene, extent_of, lattice_origin, overlap_of, tiles_fit_their_cells,
+    Overlap, MAX_CELL_COMPARISONS,
 };
 use super::PyramidBlock;
 
