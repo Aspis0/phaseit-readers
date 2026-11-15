@@ -19,8 +19,8 @@ const WAVELENGTHS: usize = 15;
 const NAME_BYTES: usize = 32 * 1024;
 
 /// The text the scenes of a dataset at the ceilings may hold: the names are shared, so they are
-/// paid once, and the names of the positions are short.
-const OWNED_BYTES: usize = 4 * 1024 * 1024;
+/// paid once (1 660 062 bytes for the dataset below), and the names of the positions are short.
+const OWNED_BYTES: usize = 2 * 1024 * 1024;
 
 /// The geometry of the crafted dataset: one grey pixel, so the scenes cost what the dataset costs.
 fn geometry() -> Geometry {
