@@ -283,7 +283,10 @@ fn compose_scene(
     let tiles = plane_tiles(members, parts.subblocks);
     let channels: Vec<ChannelMeta> = (0..dims.c)
         .map(|c| ChannelMeta {
-            name: parts.channel_names.get(c).cloned(),
+            name: parts
+                .channel_names
+                .get(c)
+                .map(|name| Arc::from(name.as_str())),
             color: None,
         })
         .collect();

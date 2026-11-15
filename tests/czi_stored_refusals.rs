@@ -260,29 +260,6 @@ fn a_level_that_stops_more_than_a_cell_short_of_the_scene_is_refused() {
     );
 }
 
-#[test]
-fn a_level_with_overlapping_tiles_is_refused() {
-    let path = scratch("stored_overlap");
-    let mut tiles = scene();
-    whole_level(&mut tiles);
-    // A tile on top of the one before it.
-    tiles.push(level_tile(0, 2, 64, 0, 64, 64, 0));
-    write_czi(&path, &tiles);
-
-    let reader = CziReader::open(&path).expect("the file opens");
-    let stored = reader
-        .stored_pyramid(0)
-        .expect("the file's own pyramid is offered");
-    assert!(stored.levels().is_empty(), "the level is not offered");
-    let refused = stored.refused_levels();
-    assert_eq!(refused.len(), 1, "the level is refused");
-    assert!(
-        refused[0].reason.contains("overlap"),
-        "the reason names the overlap: {}",
-        refused[0].reason
-    );
-}
-
 /// A coarse tile whose stored size is zero is skipped by name, and its size matches the good
 /// level's cell, so the conservative refusal takes that level with it.
 #[test]

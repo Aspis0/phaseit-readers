@@ -6,6 +6,7 @@
 
 mod support;
 
+use phasit_imread::guard::MAX_ND_WAVELENGTHS;
 use phasit_imread::nd_reader::NdReader;
 use phasit_imread::{detect_format, Error, Format, ImageReader};
 
@@ -222,7 +223,10 @@ fn a_dataset_that_declares_a_million_wavelengths_is_refused() {
     let dataset = NdDataset::with_text("hostile", text);
     let message = open_refusal(&dataset);
     assert!(message.contains("NWavelengths"), "{message}");
-    assert!(message.contains("32"), "{message}");
+    assert!(
+        message.contains(&MAX_ND_WAVELENGTHS.to_string()),
+        "{message}"
+    );
 }
 
 #[test]

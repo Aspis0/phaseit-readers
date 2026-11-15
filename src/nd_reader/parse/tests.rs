@@ -130,3 +130,58 @@ fn a_wavelength_count_above_its_own_cap_is_refused() {
         "{message}"
     );
 }
+
+/// A count just under the ceiling, and the ceiling itself, are read: the cap is where the reader
+/// stops, not one below it.
+#[test]
+fn a_wavelength_count_at_the_ceiling_is_read() {
+    // 1024 is the ceiling the guard states: the number is written here, so a change of it is seen.
+    for count in [1_023, 1_024] {
+        let text = format!(
+            "\"NDInfoFile\", Version 1.0\n\"DoWave\", TRUE\n\"NWavelengths\", {count}\n\"EndFile\"\n"
+        );
+        let parsed = parse(&text, "base").expect("a count within the ceiling");
+        assert_eq!(parsed.waves.len(), count, "{count} wavelengths are read");
+    }
+}
+
+/// A count above the ceiling is refused with a sentence that names the count and the limit.
+#[test]
+fn a_wavelength_count_above_the_ceiling_names_the_count_and_the_limit() {
+    let count = 1_025;
+    let text = format!(
+        "\"NDInfoFile\", Version 1.0\n\"DoWave\", TRUE\n\"NWavelengths\", {count}\n\"EndFile\"\n"
+    );
+    let error = parse(&text, "base").expect_err("more wavelengths than the reader holds");
+    let message = error.to_string();
+    assert!(message.contains("NWavelengths"), "{message}");
+    assert!(message.contains(&count.to_string()), "{message}");
+    assert!(message.contains("1024"), "{message}");
+}
+
+/// A count just under the ceiling, and the ceiling itself, are read.
+#[test]
+fn a_stage_position_count_at_the_ceiling_is_read() {
+    // 65536 is the ceiling the guard states: the number is written here, so a change of it is seen.
+    for count in [65_535, 65_536] {
+        let text = format!(
+            "\"NDInfoFile\", Version 1.0\n\"DoStage\", TRUE\n\"NStagePositions\", {count}\n\"EndFile\"\n"
+        );
+        let parsed = parse(&text, "base").expect("a count within the ceiling");
+        assert_eq!(parsed.stages.len(), count, "{count} positions are read");
+    }
+}
+
+/// A count above the ceiling is refused with a sentence that names the count and the limit.
+#[test]
+fn a_stage_position_count_above_the_ceiling_names_the_count_and_the_limit() {
+    let count = 65_537;
+    let text = format!(
+        "\"NDInfoFile\", Version 1.0\n\"DoStage\", TRUE\n\"NStagePositions\", {count}\n\"EndFile\"\n"
+    );
+    let error = parse(&text, "base").expect_err("more positions than the reader holds");
+    let message = error.to_string();
+    assert!(message.contains("NStagePositions"), "{message}");
+    assert!(message.contains(&count.to_string()), "{message}");
+    assert!(message.contains("65536"), "{message}");
+}

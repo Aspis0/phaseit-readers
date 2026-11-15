@@ -4,6 +4,8 @@
 //! The block is optional metadata: one that is missing or does not fit the file leaves the channels unnamed and
 //! colourless.
 
+use std::sync::Arc;
+
 use crate::lsm_bytes::read_i32;
 use crate::types::{ChannelMeta, Endian};
 
@@ -45,7 +47,7 @@ pub fn read_channel_meta(
         .into_iter()
         .enumerate()
     {
-        meta[channel].name = name;
+        meta[channel].name = name.map(|text| Arc::from(text.as_str()));
     }
     meta
 }

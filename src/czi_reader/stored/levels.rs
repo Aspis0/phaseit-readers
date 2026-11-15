@@ -16,8 +16,8 @@ use super::attribution::{orphan_refusal, skips_of, unplaced_skips, Refusal};
 use super::coarse::Skipped;
 use super::coverage::{Area, Coverage};
 use super::grid::{
-    cell_of, covers_the_scene, extent_of, lattice_origin, tiles_do_not_overlap,
-    tiles_fit_their_cells,
+    cell_of, covers_the_scene, extent_of, lattice_origin, overlap_of, tiles_fit_their_cells,
+    Overlap, MAX_CELL_COMPARISONS,
 };
 use super::PyramidBlock;
 
@@ -174,8 +174,8 @@ fn level_of(
             "a tile of the level does not fit the cell it sits in",
         ));
     }
-    if !tiles_do_not_overlap(tiles, &cell, &origin) {
-        return Err(Refusal::new("the tiles of the level overlap"));
+    if let Some(refusal) = refuse_overlap(overlap_of(tiles, &cell, &origin)) {
+        return Err(refusal);
     }
     let extent = extent_of(tiles);
     if !covers_the_scene(tiles, &extent, &cell, scene) {
@@ -195,6 +195,22 @@ fn level_of(
         },
         planes,
     })
+}
+
+/// The refusal of a level whose tiles overlap, or of one whose overlap the check may not run.
+///
+/// WHY two sentences: a level whose tiles do overlap and a level whose overlap could not be checked
+/// are different facts about the file, and only the first one is an overlap.
+fn refuse_overlap(overlap: Overlap) -> Option<Refusal> {
+    match overlap {
+        Overlap::Clear => None,
+        Overlap::Overlapping => Some(Refusal::new("the tiles of the level overlap")),
+        Overlap::TooManyTiles { tiles, comparisons } => Some(Refusal::new(format!(
+            "a cell of the level holds {tiles} tiles; comparing them would cost {comparisons} comparisons, \
+             more than the {MAX_CELL_COMPARISONS} one cell may cost, so the overlap of the level is not \
+             checked"
+        ))),
+    }
 }
 
 /// The share of the scene's area the level's own tiles cover, for the plane they cover worst.
@@ -333,3 +349,6 @@ fn scene_has_plane(scene: &CziScene, key: (i32, i32, i32)) -> bool {
         && scene.z_values.contains(&key.1)
         && scene.t_values.contains(&key.2)
 }
+
+#[cfg(test)]
+mod tests;

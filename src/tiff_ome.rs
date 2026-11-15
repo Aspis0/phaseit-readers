@@ -4,6 +4,7 @@
 //! interpret it.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
@@ -180,7 +181,7 @@ impl Walk {
                         ));
                     }
                     self.channels += 1;
-                    let name = attr_str(e, "Name");
+                    let name = attr_str(e, "Name").map(|text| Arc::from(text.as_str()));
                     let color = attr_str(e, "Color").and_then(|v| parse_ome_color(&v));
                     image.channels.push(ChannelMeta { name, color });
                 }

@@ -19,7 +19,7 @@ pub(crate) struct SceneGeometry {
 
 pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneGeometry> {
     let (sx, sy) = declared_plane_size(pixels)?;
-    let (sz, sc, st) = declared_counts(pixels)?;
+    let counts = declared_counts(pixels)?;
     refuse_interleaved(pixels)?;
     let dtype = checked_dtype(pixels, page)?;
     check_page_size(page, (sx, sy))?;
@@ -28,21 +28,23 @@ pub(crate) fn scene_geometry(pixels: &Pixels, page: &PageFacts) -> Result<SceneG
     let order = parse_dim_order(pixels.dim_order.as_deref().unwrap_or("XYCZT"))?;
 
     let samples = samples_of_page(page)?;
-    let (channels, sc) = scene_channels(pixels, samples, sc)?;
+    let (channels, sc) = scene_channels(pixels, samples, counts.c)?;
 
     let calibration = scene_calibration(pixels);
+    let mut notes = calibration.notes;
+    notes.extend(counts.notes);
     let meta = SceneMeta {
         dims: Dims5 {
-            t: st,
+            t: counts.t,
             c: sc,
-            z: sz,
+            z: counts.z,
             y: sy,
             x: sx,
         },
         dtype,
         samples: samples as u32,
         px_size_um: calibration.px_size_um,
-        notes: calibration.notes,
+        notes,
         channels,
         palette: None,
         name: pixels.name.clone().unwrap_or_default(),
@@ -101,27 +103,47 @@ fn declared_plane_size(pixels: &Pixels) -> Result<(usize, usize)> {
     }
 }
 
-/// An absent count is 1; one that does not parse refuses the scene by name.
-fn declared_counts(pixels: &Pixels) -> Result<(usize, usize, usize)> {
-    let sz = declared_count("SizeZ", pixels.size_z.as_deref())?;
-    let sc = declared_count("SizeC", pixels.size_c.as_deref())?;
-    let st = declared_count("SizeT", pixels.size_t.as_deref())?;
-    Ok((sz, sc, st))
+/// The three axis counts the `<Pixels>` states, with the notes for the counts that were read as one.
+struct DeclaredCounts {
+    z: usize,
+    c: usize,
+    t: usize,
+    /// The notes for the counts the file states as zero.
+    notes: Vec<String>,
 }
 
-fn declared_count(name: &str, raw: Option<&str>) -> Result<usize> {
-    match raw {
-        None => Ok(1),
-        Some(text) => text
-            .trim()
-            .parse::<usize>()
-            .map(|count| count.max(1))
-            .map_err(|_| {
-                Error::Parse(format!(
-                    "OME-XML <Pixels> {name} {text:?} is not a whole number"
-                ))
-            }),
+/// An absent count is 1; one that does not parse refuses the scene by name.
+fn declared_counts(pixels: &Pixels) -> Result<DeclaredCounts> {
+    let (z, z_note) = declared_count("SizeZ", pixels.size_z.as_deref(), "z plane")?;
+    let (c, c_note) = declared_count("SizeC", pixels.size_c.as_deref(), "channel")?;
+    let (t, t_note) = declared_count("SizeT", pixels.size_t.as_deref(), "time point")?;
+    Ok(DeclaredCounts {
+        z,
+        c,
+        t,
+        notes: [z_note, c_note, t_note].into_iter().flatten().collect(),
+    })
+}
+
+/// A count of zero is read as one, and the note names the field and the value the file stated.
+fn declared_count(name: &str, raw: Option<&str>, plane: &str) -> Result<(usize, Option<String>)> {
+    let Some(text) = raw else {
+        return Ok((1, None));
+    };
+    let count = text.trim().parse::<usize>().map_err(|_| {
+        Error::Parse(format!(
+            "OME-XML <Pixels> {name} {text:?} is not a whole number"
+        ))
+    })?;
+    if count == 0 {
+        return Ok((
+            1,
+            Some(format!(
+                "the file states <Pixels> {name} as 0; a count of zero is read as one {plane}"
+            )),
+        ));
     }
+    Ok((count, None))
 }
 
 /// The plan assumes one channel per IFD; interleaved OME would fail later with confusing decode errors, so it is
