@@ -54,7 +54,7 @@ fn crafted(name_bytes: usize) -> String {
 #[test]
 fn the_scenes_of_a_dataset_share_one_channel_name() {
     let dataset = parse::parse(&crafted(16), "base").expect("a dataset the text states");
-    let image = meta(&dataset, geometry(), Calibration::default());
+    let image = meta(&dataset, geometry(), Calibration::default(), None);
     let first = image.scenes[0].channels[0]
         .name
         .as_ref()
@@ -74,7 +74,7 @@ fn the_scenes_of_a_dataset_share_one_channel_name() {
 fn the_scenes_at_the_ceilings_hold_their_names_once() {
     let dataset = parse::parse(&crafted(NAME_BYTES), "base").expect("a dataset at the ceilings");
     assert_eq!(dataset.stages.len(), MAX_ND_AXIS_LEN);
-    let image = meta(&dataset, geometry(), Calibration::default());
+    let image = meta(&dataset, geometry(), Calibration::default(), None);
     let scenes = &image.scenes;
     assert_eq!(scenes.len(), MAX_ND_AXIS_LEN);
 

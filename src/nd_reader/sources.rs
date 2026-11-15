@@ -10,12 +10,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::error::{Error, Result};
+use crate::guard::MAX_ND_OPEN_MEMBERS;
 use crate::stk_reader::StkReader;
 use crate::tiff_reader::TiffReader;
 use crate::types::{DType, ImageReader};
 
-/// How many image files are kept open at once; a dataset is read plane after plane, so a few files cover it.
-const MAX_CACHED_SOURCES: usize = 8;
+/// Fewest image files a dataset keeps open: a few files cover a dataset read plane after plane.
+const MIN_OPEN_MEMBERS: usize = 8;
 
 /// The geometry every image file of a dataset shares: its pixel type, its sample count and its x/y extent.
 #[derive(Debug, Clone, Copy)]
@@ -27,16 +28,18 @@ pub(super) struct Geometry {
     pub samples: u32,
 }
 
-/// The dataset's image files, opened on demand.
+/// The dataset's image files, opened on demand; at most `bound` of them are open at once.
 pub(super) struct Sources {
     geometry: Geometry,
+    bound: usize,
     open: Mutex<Vec<(PathBuf, Arc<dyn ImageReader>)>>,
 }
 
 impl Sources {
-    pub(super) fn new(geometry: Geometry) -> Sources {
+    pub(super) fn new(geometry: Geometry, bound: usize) -> Sources {
         Sources {
             geometry,
+            bound,
             open: Mutex::new(Vec::new()),
         }
     }
@@ -50,14 +53,18 @@ impl Sources {
     /// The reader of the image file at `path`, opened on first use.
     pub(super) fn reader(&self, path: &Path) -> Result<Arc<dyn ImageReader>> {
         let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some((_, reader)) = open.iter().find(|(at, _)| at == path) {
-            return Ok(Arc::clone(reader));
+        if let Some(at) = open.iter().position(|(known, _)| known == path) {
+            // A file read again moves to the back: the eviction below takes the least recently used one.
+            let entry = open.remove(at);
+            let reader = Arc::clone(&entry.1);
+            open.push(entry);
+            return Ok(reader);
         }
         let reader = open_file(path)?;
         self.check(reader.as_ref(), path)?;
         open.push((path.to_path_buf(), Arc::clone(&reader)));
-        // The oldest file goes first: the bound keeps a dataset of many files from holding them all open.
-        if open.len() > MAX_CACHED_SOURCES {
+        // The bound keeps a dataset of many files from holding them all open.
+        if open.len() > self.bound {
             open.remove(0);
         }
         Ok(reader)
@@ -88,6 +95,20 @@ impl Sources {
         }
         Ok(())
     }
+}
+
+/// How many image files a dataset of `files` keeps open: one per file it holds, never fewer than the floor and never
+/// more than the ceiling.
+pub(super) fn open_bound(files: usize) -> usize {
+    files.clamp(MIN_OPEN_MEMBERS, MAX_ND_OPEN_MEMBERS)
+}
+
+/// The note a scene carries when the dataset holds more image files than stay open: reading across them reopens the
+/// ones that were closed, so the cost is said by number.
+pub(super) fn cache_note(files: usize, bound: usize) -> Option<String> {
+    (files > bound).then(|| {
+        format!("MetaMorph .nd: {files} image files, at most {bound} stay open: reading across files reopens them")
+    })
 }
 
 /// The reader of one image file: a z-series is a MetaMorph STK, a single plane a plain TIFF. The dataset names the

@@ -42,15 +42,22 @@ pub struct NdReader {
 impl ImageReader for NdReader {
     fn open(path: &Path) -> Result<Self> {
         let (dataset, listing) = dataset_and_listing(path)?;
-        let (reference, reader) = reference(&dataset, &listing)?;
+        let files = members(&dataset, &listing);
+        let (reference, reader) = reference(&files)?;
         let geometry = geometry(reader.as_ref())?;
         let calibration = calibration(&dataset, reader.as_ref());
+        let bound = sources::open_bound(files.len());
 
-        let sources = Sources::new(geometry);
+        let sources = Sources::new(geometry, bound);
         sources.insert(&reference, Arc::clone(&reader));
 
         Ok(NdReader {
-            meta: meta(&dataset, geometry, calibration),
+            meta: meta(
+                &dataset,
+                geometry,
+                calibration,
+                sources::cache_note(files.len(), bound),
+            ),
             dataset,
             listing,
             sources,
@@ -130,11 +137,11 @@ fn members(dataset: &Dataset, listing: &Listing) -> Vec<PathBuf> {
 
 /// The dataset's first image file that reads: a file that does not decode is skipped, so one corrupt member does
 /// not close the whole acquisition. When no file reads, the first failure is named.
-fn reference(dataset: &Dataset, listing: &Listing) -> Result<(PathBuf, Arc<dyn ImageReader>)> {
+fn reference(files: &[PathBuf]) -> Result<(PathBuf, Arc<dyn ImageReader>)> {
     let mut first_error: Option<Error> = None;
-    for path in members(dataset, listing) {
-        match sources::open_file(&path) {
-            Ok(reader) => return Ok((path, reader)),
+    for path in files {
+        match sources::open_file(path) {
+            Ok(reader) => return Ok((path.clone(), reader)),
             Err(error) => first_error = first_error.or(Some(error)),
         }
     }
@@ -173,7 +180,14 @@ fn calibration(dataset: &Dataset, reader: &dyn ImageReader) -> Calibration {
 /// The dataset's scenes: one per stage position, with the wavelengths as its channels.
 ///
 /// WHY the names are shared: a dataset names its channels once, so a name's text is paid once.
-fn meta(dataset: &Dataset, geometry: Geometry, calibration: Calibration) -> ImageMeta {
+fn meta(
+    dataset: &Dataset,
+    geometry: Geometry,
+    calibration: Calibration,
+    cache_note: Option<String>,
+) -> ImageMeta {
+    let mut notes = calibration.notes;
+    notes.extend(cache_note);
     let channels: Vec<ChannelMeta> = dataset
         .waves
         .iter()
@@ -198,7 +212,7 @@ fn meta(dataset: &Dataset, geometry: Geometry, calibration: Calibration) -> Imag
             dtype: geometry.dtype,
             samples: geometry.samples,
             px_size_um: calibration.px_size_um,
-            notes: calibration.notes.clone(),
+            notes: notes.clone(),
             channels: channels.clone(),
             palette: None,
             name: scene_name(dataset, index, stage),
