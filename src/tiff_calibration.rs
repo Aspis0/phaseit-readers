@@ -53,44 +53,21 @@ pub fn calibration_from_tags(
         return Calibration::default();
     }
 
-    // The description names the unit only where the ResolutionUnit tag names none: the tag is the file's own statement.
-    let scale = match resolution_unit {
-        Some(RESOLUTION_UNIT_INCH) => {
-            let dpi = x_per_unit.or(y_per_unit).unwrap_or_default();
-            return Calibration::uncalibrated(vec![print_resolution_note(dpi)]);
-        }
-        Some(RESOLUTION_UNIT_CENTIMETER) => Scale {
-            micrometers_per_unit: MICROMETERS_PER_CENTIMETER,
-            name: "centimetre".to_string(),
-        },
-        Some(RESOLUTION_UNIT_NONE) | None => {
-            match description.as_ref() {
-                Some(description) => Scale {
-                    micrometers_per_unit: description.micrometers_per_unit,
-                    name: description.unit.clone(),
-                },
-                None => return Calibration::default(),
-            }
-        }
-        Some(_) => return Calibration::default(),
+    // An inch resolution is a print layout, not a pixel size.
+    if resolution_unit == Some(RESOLUTION_UNIT_INCH) {
+        let dpi = x_per_unit.or(y_per_unit).unwrap_or_default();
+        return Calibration::uncalibrated(vec![print_resolution_note(dpi)]);
+    }
+
+    let Some(scale) = scale_of(resolution_unit, description.as_ref()) else {
+        return Calibration::default();
     };
 
     let x = x_per_unit.map(|count| stated_size(count, &scale, "X"));
     let y = y_per_unit.map(|count| stated_size(count, &scale, "Y"));
 
-    // Each stated count is named once: a count the file states on one axis is one fact about the file, not two.
-    let mut notes = Vec::new();
-    for size in [x, y].into_iter().flatten() {
-        if !is_plausible_um(size.um) {
-            notes.push(pixel_size_range_note(
-                size.axis,
-                size.count,
-                &scale.name,
-                scale.micrometers_per_unit,
-                size.um,
-            ));
-        }
-    }
+    // Each stated count is named once: a count the file states on one axis is one fact about the file.
+    let notes = range_notes([x, y].into_iter().flatten(), &scale);
     if !notes.is_empty() {
         return Calibration::uncalibrated(notes);
     }
@@ -102,13 +79,45 @@ pub fn calibration_from_tags(
         (None, None) => return Calibration::default(),
     };
 
-    Calibration::sized(
-        x.um as f32,
-        y.um as f32,
-        description
-            .and_then(|description| description.spacing_um)
-            .map(|um| um as f32),
-    )
+    let spacing = description
+        .and_then(|description| description.spacing_um)
+        .map(|um| um as f32);
+    Calibration::sized(x.um as f32, y.um as f32, spacing)
+}
+
+/// The scale a stated resolution is converted with: how many micrometres one unit of the file is, and
+/// the name the file gives that unit.
+///
+/// WHY the description is a fallback: the description names the unit only where the ResolutionUnit tag
+/// names none: the tag is the file's own statement.
+fn scale_of(resolution_unit: Option<u16>, description: Option<&ImageJDescription>) -> Option<Scale> {
+    match resolution_unit {
+        Some(RESOLUTION_UNIT_CENTIMETER) => Some(Scale {
+            micrometers_per_unit: MICROMETERS_PER_CENTIMETER,
+            name: "centimetre".to_string(),
+        }),
+        Some(RESOLUTION_UNIT_NONE) | None => description.map(|description| Scale {
+            micrometers_per_unit: description.micrometers_per_unit,
+            name: description.unit.clone(),
+        }),
+        Some(_) => None,
+    }
+}
+
+/// The notes for the stated sizes that are outside the accepted range.
+fn range_notes(sizes: impl Iterator<Item = StatedSize>, scale: &Scale) -> Vec<String> {
+    sizes
+        .filter(|size| !is_plausible_um(size.um))
+        .map(|size| {
+            pixel_size_range_note(
+                size.axis,
+                size.count,
+                &scale.name,
+                scale.micrometers_per_unit,
+                size.um,
+            )
+        })
+        .collect()
 }
 
 /// The size a stated count gives, in micrometres per pixel.
