@@ -7,13 +7,14 @@ use crate::czi_reader::scene::CziScene;
 
 use super::levels::StoredTile;
 
-/// The most comparisons the overlap check may spend on one level.
-///
-/// WHY: the check compares every pair of the tiles that share a plane and a cell, so a cell of k
-/// tiles costs k*(k-1)/2 of them. A million comparisons is a millisecond of work, so a crafted file
-/// cannot make the check slow; a level that would cost more is refused by name and not called an
-/// overlap.
-pub(super) const MAX_OVERLAP_COMPARISONS: u64 = 1_000_000;
+/// The most tiles one cell of the grid may hold: the check compares every pair of the tiles of a
+/// cell, so a cell of k tiles costs k*(k-1)/2 comparisons and a level costs about 64 of them per
+/// tile.
+pub(super) const MAX_TILES_PER_CELL: usize = 128;
+
+/// The comparisons one cell may cost: the pairs of the tiles it holds.
+pub(super) const MAX_CELL_COMPARISONS: u64 =
+    (MAX_TILES_PER_CELL * (MAX_TILES_PER_CELL - 1) / 2) as u64;
 
 /// The verdict of the overlap check on the tiles of a level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,10 +23,12 @@ pub(super) enum Overlap {
     Clear,
     /// Two tiles of a plane cover the same pixels.
     Overlapping,
-    /// A cell holds more tiles than the check may compare; the count names them.
+    /// A cell holds more tiles than the check may compare; the count and the cost name them.
     TooManyTiles {
         /// The tiles the cell holds.
         tiles: usize,
+        /// The comparisons comparing them would cost.
+        comparisons: u64,
     },
 }
 
@@ -131,8 +134,7 @@ pub(super) fn tiles_fit_their_cells(
 
 /// The overlap of the level's tiles: whether two tiles of a plane cover the same pixels.
 ///
-/// WHY the plane is part of the cell: the tiles of different planes are different images of the
-/// same scene, so two of them may sit at the same place without overlapping.
+/// WHY the plane is part of the cell: two tiles of different planes are two images of one scene.
 pub(super) fn overlap_of(
     tiles: &[StoredTile],
     cell: &[usize; 2],
@@ -151,15 +153,13 @@ pub(super) fn overlap_of(
     let mut cells: Vec<(CellKey, Vec<&StoredTile>)> = cells.into_iter().collect();
     cells.sort_by_key(|(key, _)| *key);
 
-    let mut spent: u64 = 0;
     for (_, group) in cells {
-        let cost = pair_count(group.len());
-        if spent + cost > MAX_OVERLAP_COMPARISONS {
+        if group.len() > MAX_TILES_PER_CELL {
             return Overlap::TooManyTiles {
                 tiles: group.len(),
+                comparisons: pair_count(group.len()),
             };
         }
-        spent += cost;
         for (index, first) in group.iter().enumerate() {
             for second in &group[index + 1..] {
                 if tiles_overlap(first, second) {

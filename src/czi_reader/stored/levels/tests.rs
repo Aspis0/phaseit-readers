@@ -20,11 +20,14 @@ fn two_tiles_of_a_plane_at_the_same_place_are_an_overlap() {
 /// A level whose overlap was not checked is not called an overlap: the sentence says what happened.
 #[test]
 fn a_level_whose_overlap_was_not_checked_says_so_and_names_the_count() {
-    let refusal = reason(Overlap::TooManyTiles { tiles: 1415 });
-    assert!(refusal.contains("1415"), "the count is named: {refusal}");
-    assert!(
-        refusal.contains(&MAX_OVERLAP_COMPARISONS.to_string()),
-        "the limit is named: {refusal}"
+    let refusal = reason(Overlap::TooManyTiles {
+        tiles: 129,
+        comparisons: 8_256,
+    });
+    assert_eq!(
+        refusal,
+        "a cell of the level holds 129 tiles; comparing them would cost 8256 comparisons, more than \
+         the 8128 one cell may cost, so the overlap of the level is not checked"
     );
     assert!(
         !refusal.contains("the tiles of the level overlap"),

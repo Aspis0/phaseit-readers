@@ -17,7 +17,7 @@ use super::coarse::Skipped;
 use super::coverage::{Area, Coverage};
 use super::grid::{
     cell_of, covers_the_scene, extent_of, lattice_origin, overlap_of, tiles_fit_their_cells, Overlap,
-    MAX_OVERLAP_COMPARISONS,
+    MAX_CELL_COMPARISONS,
 };
 use super::PyramidBlock;
 
@@ -205,9 +205,10 @@ fn refuse_overlap(overlap: Overlap) -> Option<Refusal> {
     match overlap {
         Overlap::Clear => None,
         Overlap::Overlapping => Some(Refusal::new("the tiles of the level overlap")),
-        Overlap::TooManyTiles { tiles } => Some(Refusal::new(format!(
-            "a cell of the level holds {tiles} tiles; the overlap check would cost more than \
-             {MAX_OVERLAP_COMPARISONS} comparisons, so the overlap of the level is not checked"
+        Overlap::TooManyTiles { tiles, comparisons } => Some(Refusal::new(format!(
+            "a cell of the level holds {tiles} tiles; comparing them would cost {comparisons} comparisons, \
+             more than the {MAX_CELL_COMPARISONS} one cell may cost, so the overlap of the level is not \
+             checked"
         ))),
     }
 }
