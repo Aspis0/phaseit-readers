@@ -3,7 +3,9 @@
 //! An ImageJ description names the unit its resolution counts in; an inch resolution is a print resolution, and one
 //! with no absolute unit states no pixel size.
 
-use phasit_imread::tiff_calibration::{calibration_from_tags, print_resolution_note};
+use phasit_imread::tiff_calibration::{
+    calibration_from_tags, pixel_size_range_note, print_resolution_note,
+};
 use phasit_imread::PxSizeUm;
 
 /// The pixel size the tags state, when they state one; the notes on an unusable resolution are not under test here.
@@ -265,4 +267,112 @@ fn an_unusable_resolution_count_states_no_pixel_size() {
         );
         assert!(px.is_none(), "{count} is no usable resolution count");
     }
+}
+
+/// A size outside the accepted range is not published, and the note says which size the file stated.
+#[test]
+fn a_pixel_size_out_of_range_is_named_instead_of_dropped() {
+    // 2000 pixels per micrometre is half a millimetre per pixel: no light microscope measures that.
+    let calibration = calibration_from_tags(
+        Some("ImageJ=1.54g\nunit=\u{b5}m\n"),
+        Some(2_000.0),
+        Some(13.0),
+        Some(1),
+    );
+    assert!(
+        calibration.px_size_um.is_none(),
+        "a size outside the range is not published"
+    );
+    assert_eq!(calibration.notes.len(), 1, "one axis is out of range");
+    let note = &calibration.notes[0];
+    assert!(note.contains("on X"), "the note names the axis: {note}");
+    assert!(
+        note.contains("2000"),
+        "the note names the resolution the file states: {note}"
+    );
+    assert!(
+        note.contains("0.0005"),
+        "the note names the size the conversion gives: {note}"
+    );
+    assert!(
+        note.contains("0.001") && note.contains("50"),
+        "the note names the accepted range: {note}"
+    );
+    assert!(
+        note.contains("uncalibrated"),
+        "the note says the image is read uncalibrated: {note}"
+    );
+}
+
+#[test]
+fn a_pixel_size_out_of_range_on_y_names_the_y_axis() {
+    // A thousandth of a pixel per micrometre is a millimetre per pixel.
+    let calibration = calibration_from_tags(
+        Some("ImageJ=1.54g\nunit=\u{b5}m\n"),
+        Some(13.0),
+        Some(0.001),
+        Some(1),
+    );
+    assert!(calibration.px_size_um.is_none());
+    assert_eq!(calibration.notes.len(), 1, "one axis is out of range");
+    assert!(
+        calibration.notes[0].contains("on Y"),
+        "the note names the axis: {}",
+        calibration.notes[0]
+    );
+}
+
+#[test]
+fn a_pixel_size_inside_the_range_earns_no_note() {
+    let calibration = calibration_from_tags(
+        Some("ImageJ=1.54g\nunit=\u{b5}m\n"),
+        Some(13_658_276.0 / 1_000_000.0),
+        Some(13_658_276.0 / 1_000_000.0),
+        Some(1),
+    );
+    assert!(
+        calibration.px_size_um.is_some(),
+        "a size inside the range is published"
+    );
+    assert!(
+        calibration.notes.is_empty(),
+        "a size the reader uses earns no note: {:?}",
+        calibration.notes
+    );
+}
+
+/// Each axis the file states is named on its own: the two counts are two facts about the file.
+#[test]
+fn both_axes_out_of_range_are_named_separately() {
+    let calibration = calibration_from_tags(
+        Some("ImageJ=1.54g\nunit=\u{b5}m\n"),
+        Some(2_000.0),
+        Some(0.001),
+        Some(1),
+    );
+    assert_eq!(calibration.notes.len(), 2, "both axes are out of range");
+    assert!(calibration.notes[0].contains("on X"));
+    assert!(calibration.notes[1].contains("on Y"));
+}
+
+/// A count the file states on one axis is one fact: the other axis takes its value, and it is named once.
+#[test]
+fn a_count_stated_on_one_axis_is_named_once() {
+    let calibration = calibration_from_tags(Some("ImageJ=1.54g\nunit=\u{b5}m\n"), Some(2_000.0), None, Some(1));
+    assert_eq!(calibration.notes.len(), 1, "the count is named once");
+    assert!(
+        calibration.notes[0].contains("on X"),
+        "the note names the axis that stated it: {}",
+        calibration.notes[0]
+    );
+}
+
+/// The wording of the note is pinned in the crate that owns it.
+#[test]
+fn the_out_of_range_wording_is_pinned() {
+    assert_eq!(
+        pixel_size_range_note("X", 2_000.0, "µm", 1.0, 0.0005),
+        "the file states a resolution of 2000 per µm on X; 1 um per µm gives 0.0005 um/px, outside the \
+         accepted range of 0.001 to 50 um/px, so the image is read uncalibrated"
+    );
 }

@@ -3,6 +3,7 @@
 //! ImageJ's `spacing=` is the Z step, never a pixel size. An inch resolution (a print layout) or one with no
 //! absolute unit states no pixel size. A pixel size is published only between 0.001 µm and 50 µm on BOTH axes.
 //! ImageJ's resolution is pixels per the unit its description names: `unit=µm`, 13.658276 px/µm = 0.0732 µm/px.
+//! A size outside the range is not published, and the note names the size the file stated and the range.
 
 use crate::calibration::Calibration;
 
@@ -15,6 +16,24 @@ const RESOLUTION_UNIT_INCH: u16 = 2;
 const RESOLUTION_UNIT_CENTIMETER: u16 = 3;
 
 const MICROMETERS_PER_CENTIMETER: f64 = 10_000.0;
+
+/// The scale a stated resolution is converted with: how many micrometres one unit of the file is, and the
+/// name the file gives that unit.
+struct Scale {
+    micrometers_per_unit: f64,
+    name: String,
+}
+
+/// The pixel size one stated resolution gives, and the axis that stated it.
+#[derive(Clone, Copy)]
+struct StatedSize {
+    /// The size in micrometres per pixel.
+    um: f64,
+    /// The count the file states, in pixels per unit.
+    count: f64,
+    /// The axis the count was stated on: `X` or `Y`.
+    axis: &'static str,
+}
 
 /// The pixel size in µm, plus the notes the calibration could not give; no default is invented, only INCH earns a note.
 pub fn calibration_from_tags(
@@ -35,23 +54,47 @@ pub fn calibration_from_tags(
     }
 
     // The description names the unit only where the ResolutionUnit tag names none: the tag is the file's own statement.
-    let micrometers_per_unit = match resolution_unit {
+    let scale = match resolution_unit {
         Some(RESOLUTION_UNIT_INCH) => {
             let dpi = x_per_unit.or(y_per_unit).unwrap_or_default();
             return Calibration::uncalibrated(vec![print_resolution_note(dpi)]);
         }
-        Some(RESOLUTION_UNIT_CENTIMETER) => MICROMETERS_PER_CENTIMETER,
+        Some(RESOLUTION_UNIT_CENTIMETER) => Scale {
+            micrometers_per_unit: MICROMETERS_PER_CENTIMETER,
+            name: "centimetre".to_string(),
+        },
         Some(RESOLUTION_UNIT_NONE) | None => {
             match description.as_ref() {
-                Some(description) => description.micrometers_per_unit,
+                Some(description) => Scale {
+                    micrometers_per_unit: description.micrometers_per_unit,
+                    name: description.unit.clone(),
+                },
                 None => return Calibration::default(),
             }
         }
         Some(_) => return Calibration::default(),
     };
 
-    let x = x_per_unit.map(|count| micrometers_per_unit / count);
-    let y = y_per_unit.map(|count| micrometers_per_unit / count);
+    let x = x_per_unit.map(|count| stated_size(count, &scale, "X"));
+    let y = y_per_unit.map(|count| stated_size(count, &scale, "Y"));
+
+    // Each stated count is named once: a count the file states on one axis is one fact about the file, not two.
+    let mut notes = Vec::new();
+    for size in [x, y].into_iter().flatten() {
+        if !is_plausible_um(size.um) {
+            notes.push(pixel_size_range_note(
+                size.axis,
+                size.count,
+                &scale.name,
+                scale.micrometers_per_unit,
+                size.um,
+            ));
+        }
+    }
+    if !notes.is_empty() {
+        return Calibration::uncalibrated(notes);
+    }
+
     let (x, y) = match (x, y) {
         (Some(x), Some(y)) => (x, y),
         (Some(x), None) => (x, x),
@@ -59,16 +102,44 @@ pub fn calibration_from_tags(
         (None, None) => return Calibration::default(),
     };
 
-    if !is_plausible_um(x) || !is_plausible_um(y) {
-        return Calibration::default();
-    }
-
     Calibration::sized(
-        x as f32,
-        y as f32,
+        x.um as f32,
+        y.um as f32,
         description
             .and_then(|description| description.spacing_um)
             .map(|um| um as f32),
+    )
+}
+
+/// The size a stated count gives, in micrometres per pixel.
+fn stated_size(count: f64, scale: &Scale, axis: &'static str) -> StatedSize {
+    StatedSize {
+        um: scale.micrometers_per_unit / count,
+        count,
+        axis,
+    }
+}
+
+/// The note an out-of-range pixel size earns: the file states a size this reader cannot publish.
+/// Its wording lives here, once, so the reader and the tests describe the size the same way.
+pub fn pixel_size_range_note(
+    axis: &str,
+    count: f64,
+    unit: &str,
+    micrometers_per_unit: f64,
+    um: f64,
+) -> String {
+    format!(
+        "the file states a resolution of {} per {} on {}; {} um per {} gives {} um/px, outside the accepted \
+         range of {} to {} um/px, so the image is read uncalibrated",
+        short_number(count),
+        unit,
+        axis,
+        short_number(micrometers_per_unit),
+        unit,
+        short_number(um),
+        short_number(MIN_PLAUSIBLE_UM),
+        short_number(MAX_PLAUSIBLE_UM),
     )
 }
 
@@ -123,6 +194,8 @@ fn unescape(text: &str) -> String {
 
 struct ImageJDescription {
     micrometers_per_unit: f64,
+    /// The unit as the description spells it: the note names the unit the file states.
+    unit: String,
     spacing_um: Option<f64>,
 }
 
@@ -149,10 +222,22 @@ fn imagej_description(description: &str) -> Option<ImageJDescription> {
         .map(|value| value * micrometers_per_unit);
     Some(ImageJDescription {
         micrometers_per_unit,
+        unit: unit.to_string(),
         spacing_um,
     })
 }
 
 fn is_plausible_um(micrometers: f64) -> bool {
     micrometers.is_finite() && (MIN_PLAUSIBLE_UM..=MAX_PLAUSIBLE_UM).contains(&micrometers)
+}
+
+/// A number as the note states it: rounded, so a note carries the size and not its last digits. A value too
+/// small for that form keeps its exponent, so a size of zero is never written where there is none.
+fn short_number(value: f64) -> String {
+    let text = format!("{value:.6}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-" || (trimmed == "0" && value != 0.0) {
+        return format!("{value:e}");
+    }
+    trimmed.to_string()
 }
