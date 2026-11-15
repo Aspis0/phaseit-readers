@@ -7,8 +7,35 @@ use crate::czi_reader::scene::CziScene;
 
 use super::levels::StoredTile;
 
-/// The most tiles one grid cell may hold: the overlap check is quadratic inside a cell.
-pub(super) const MAX_TILES_PER_CELL: usize = 64;
+/// The most comparisons the overlap check may spend on one level.
+///
+/// WHY: the check compares every pair of the tiles that share a plane and a cell, so a cell of k
+/// tiles costs k*(k-1)/2 of them. A million comparisons is a millisecond of work, so a crafted file
+/// cannot make the check slow; a level that would cost more is refused by name and not called an
+/// overlap.
+pub(super) const MAX_OVERLAP_COMPARISONS: u64 = 1_000_000;
+
+/// The verdict of the overlap check on the tiles of a level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Overlap {
+    /// No two tiles of a plane cover the same pixels.
+    Clear,
+    /// Two tiles of a plane cover the same pixels.
+    Overlapping,
+    /// A cell holds more tiles than the check may compare; the count names them.
+    TooManyTiles {
+        /// The tiles the cell holds.
+        tiles: usize,
+    },
+}
+
+/// The cell of the grid a tile sits in: the plane it belongs to, and its lattice position.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct CellKey {
+    plane: (i32, i32, i32),
+    x: i64,
+    y: i64,
+}
 
 /// The grid's cell size: the size of a whole tile of the level.
 pub(super) fn cell_of(tiles: &[StoredTile]) -> [usize; 2] {
@@ -102,37 +129,60 @@ pub(super) fn tiles_fit_their_cells(
     })
 }
 
-/// Whether two tiles of the level do not cover the same pixels.
-pub(super) fn tiles_do_not_overlap(
+/// The overlap of the level's tiles: whether two tiles of a plane cover the same pixels.
+///
+/// WHY the plane is part of the cell: the tiles of different planes are different images of the
+/// same scene, so two of them may sit at the same place without overlapping.
+pub(super) fn overlap_of(
     tiles: &[StoredTile],
     cell: &[usize; 2],
     origin: &[i64; 2],
-) -> bool {
-    let mut cells: HashMap<(i64, i64), Vec<&StoredTile>> = HashMap::new();
+) -> Overlap {
+    let mut cells: HashMap<CellKey, Vec<&StoredTile>> = HashMap::new();
     for tile in tiles {
-        let key = (
-            (tile.x - origin[0]).div_euclid(cell[0] as i64),
-            (tile.y - origin[1]).div_euclid(cell[1] as i64),
-        );
+        let key = CellKey {
+            plane: tile.plane,
+            x: (tile.x - origin[0]).div_euclid(cell[0] as i64),
+            y: (tile.y - origin[1]).div_euclid(cell[1] as i64),
+        };
         cells.entry(key).or_default().push(tile);
     }
-    for group in cells.values() {
-        if group.len() > MAX_TILES_PER_CELL {
-            return false;
+    // The cells are walked in a fixed order, so a level that costs too much names the same cell every time.
+    let mut cells: Vec<(CellKey, Vec<&StoredTile>)> = cells.into_iter().collect();
+    cells.sort_by_key(|(key, _)| *key);
+
+    let mut spent: u64 = 0;
+    for (_, group) in cells {
+        let cost = pair_count(group.len());
+        if spent + cost > MAX_OVERLAP_COMPARISONS {
+            return Overlap::TooManyTiles {
+                tiles: group.len(),
+            };
         }
+        spent += cost;
         for (index, first) in group.iter().enumerate() {
             for second in &group[index + 1..] {
-                let overlaps = first.x < second.x + second.source_w
-                    && second.x < first.x + first.source_w
-                    && first.y < second.y + second.source_h
-                    && second.y < first.y + first.source_h;
-                if overlaps {
-                    return false;
+                if tiles_overlap(first, second) {
+                    return Overlap::Overlapping;
                 }
             }
         }
     }
-    true
+    Overlap::Clear
+}
+
+/// The comparisons a cell of `tiles` tiles costs: every pair of them is compared.
+fn pair_count(tiles: usize) -> u64 {
+    let count = tiles as u64;
+    count * count.saturating_sub(1) / 2
+}
+
+/// Whether two tiles of a plane cover the same pixels.
+fn tiles_overlap(first: &StoredTile, second: &StoredTile) -> bool {
+    first.x < second.x + second.source_w
+        && second.x < first.x + first.source_w
+        && first.y < second.y + second.source_h
+        && second.y < first.y + first.source_h
 }
 
 /// The level's extent: the box its tiles cover, in source pixels.
@@ -203,3 +253,6 @@ pub(super) fn div_ceil(a: i64, b: i64) -> i64 {
         quotient
     }
 }
+
+#[cfg(test)]
+mod tests;
