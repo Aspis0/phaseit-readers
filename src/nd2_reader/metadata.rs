@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::types::ChannelMeta;
 
@@ -60,8 +61,8 @@ pub(super) fn parse_channels(buf: &[u8], map: &HashMap<Vec<u8>, (u64, u64)>, com
                         if let ClxValue::Level(plane) = v {
                             let name = plane
                                 .get_str("sDescription")
-                                .map(str::to_string)
-                                .filter(|s| !s.is_empty());
+                                .map(Arc::<str>::from)
+                                .filter(|text| !text.is_empty());
                             let color = plane.get_u32("uiColor").map(abgr_to_rgb);
                             out.push(ChannelMeta { name, color });
                         }

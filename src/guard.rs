@@ -25,14 +25,12 @@ pub const MAX_ND_FILE_BYTES: u64 = 1024 * 1024;
 /// z steps): no real acquisition holds a million of them, and the product is what a reader has to open.
 pub const MAX_ND_PLANES: usize = 1_000_000;
 
-/// Largest number of wavelengths a MetaMorph `.nd` dataset may declare (1024): a wavelength costs
-/// the reader one wave in the dataset (32 bytes) and one `ChannelMeta` (32 bytes) in every scene,
-/// and the plane cap bounds their product.
+/// Largest number of wavelengths a MetaMorph `.nd` dataset may declare (1024): a wavelength costs one
+/// `ChannelMeta` (24 bytes) in every scene, and the plane cap bounds the product of the axes.
 pub const MAX_ND_WAVELENGTHS: usize = 1_024;
 
 /// Largest number of stage positions, time points or z steps a MetaMorph `.nd` dataset may declare
-/// (65 536): a stage position costs the reader one `SceneMeta` (160 bytes on a 64-bit build) and its
-/// name, so 65 536 of them cost about 13 MiB of scene table.
+/// (65 536): a stage costs one `SceneMeta` (160 bytes), one channel list and its own name.
 pub const MAX_ND_AXIS_LEN: usize = 65_536;
 
 /// Largest number of files a MetaMorph `.nd` dataset's directory may hold (100 000): the listing is read into
@@ -121,9 +119,23 @@ mod tests {
             );
             assert_eq!(
                 size_of::<ChannelMeta>(),
-                32,
+                24,
                 "the channel cost the .nd wavelength ceiling is sized from"
             );
         }
+    }
+
+    /// The scene table of a dataset at the ceilings: the scenes, their channel lists and their names.
+    #[test]
+    fn the_scene_table_at_the_ceilings_is_bounded() {
+        // The plane cap bounds the product of the axes, so the channel lists of all the scenes cost
+        // at most one channel per plane; the names are shared, so their text is paid once.
+        let per_scene = size_of::<SceneMeta>() + size_of::<Vec<ChannelMeta>>() + size_of::<String>();
+        let table = MAX_ND_AXIS_LEN * per_scene + MAX_ND_PLANES * size_of::<ChannelMeta>();
+        assert!(
+            table <= 40 * 1024 * 1024,
+            "the scene table of a dataset at the ceilings holds {} MiB",
+            table / (1024 * 1024)
+        );
     }
 }

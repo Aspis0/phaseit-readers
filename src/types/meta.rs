@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::error::{Error, Result};
 
 use super::dims::Dims5;
@@ -5,7 +7,9 @@ use super::pixel::DType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ChannelMeta {
-    pub name: Option<String>,
+    /// The channel's name, shared: a dataset that names its channels once keeps one copy of the text,
+    /// so a scene that names them does not pay for the text again.
+    pub name: Option<Arc<str>>,
     pub color: Option<[u8; 3]>,
 }
 

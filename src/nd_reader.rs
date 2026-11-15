@@ -14,6 +14,8 @@ mod listing;
 mod names;
 mod parse;
 mod sources;
+#[cfg(test)]
+mod tests;
 
 use std::fs::File;
 use std::io::Read;
@@ -169,12 +171,14 @@ fn calibration(dataset: &Dataset, reader: &dyn ImageReader) -> Calibration {
 }
 
 /// The dataset's scenes: one per stage position, with the wavelengths as its channels.
+///
+/// WHY the names are shared: a dataset names its channels once, so a name's text is paid once.
 fn meta(dataset: &Dataset, geometry: Geometry, calibration: Calibration) -> ImageMeta {
     let channels: Vec<ChannelMeta> = dataset
         .waves
         .iter()
         .map(|wave| ChannelMeta {
-            name: (!wave.name.is_empty()).then(|| wave.name.clone()),
+            name: (!wave.name.is_empty()).then(|| Arc::from(wave.name.as_str())),
             color: None,
         })
         .collect();

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::calibration::Calibration;
 use crate::error::{Error, Result};
@@ -336,7 +337,7 @@ fn channel_metas(chans: &[ParsedChannel]) -> Vec<ChannelMeta> {
             name: if c.lut_name.is_empty() {
                 None
             } else {
-                Some(c.lut_name.clone())
+                Some(Arc::from(c.lut_name.as_str()))
             },
             color: lut_color(&c.lut_name),
         })
