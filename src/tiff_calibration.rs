@@ -47,10 +47,10 @@ pub fn calibration_from_tags(
         return Calibration::default();
     }
 
-    // A stated but unusable count (0, negative, non-finite) is absurd, not absent: never replaced by the other axis.
-    let unusable = |count: Option<f64>| matches!(count, Some(v) if !(v.is_finite() && v > 0.0));
-    if unusable(x_per_unit) || unusable(y_per_unit) {
-        return Calibration::default();
+    // A stated but unusable count (0, negative, non-finite) is absurd, not absent: it is named.
+    let notes = unusable_count_notes(x_per_unit, y_per_unit);
+    if !notes.is_empty() {
+        return Calibration::uncalibrated(notes);
     }
 
     // An inch resolution is a print layout, not a pixel size.
@@ -102,6 +102,25 @@ fn scale_of(resolution_unit: Option<u16>, description: Option<&ImageJDescription
         }),
         Some(_) => None,
     }
+}
+
+/// The notes for the counts a file states as unusable: a count of zero, a negative one or a
+/// non-finite one is a stated absurdity, not an absence.
+fn unusable_count_notes(x: Option<f64>, y: Option<f64>) -> Vec<String> {
+    [("X", x), ("Y", y)]
+        .into_iter()
+        .filter_map(|(axis, count)| {
+            let count = count?;
+            if count.is_finite() && count > 0.0 {
+                return None;
+            }
+            Some(format!(
+                "the file states a resolution of {} on {axis}; a resolution must be a positive number of \
+                 pixels per unit, so the image is read uncalibrated",
+                short_number(count)
+            ))
+        })
+        .collect()
 }
 
 /// The notes for the stated sizes that are outside the accepted range.
