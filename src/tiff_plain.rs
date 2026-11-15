@@ -160,11 +160,12 @@ pub(crate) fn infer_plain(
         real_pages.push(0);
     }
 
-    let layout = description
+    let stack = description
         .and_then(tiff_imagej::layout)
-        .and_then(|layout| layout.stack_shape(real_pages.len()))
-        .unwrap_or((1, real_pages.len(), 1));
-    let (channels, slices, frames) = layout;
+        .and_then(|layout| layout.stack_shape(real_pages.len()));
+    let (channels, slices, frames, count_notes) = stack
+        .map(|shape| (shape.channels, shape.slices, shape.frames, shape.notes))
+        .unwrap_or((1, real_pages.len(), 1, Vec::new()));
 
     if colour.samples > 1 && channels > 1 {
         return Err(Error::Unsupported(format!(
@@ -184,12 +185,15 @@ pub(crate) fn infer_plain(
     // Plain TIFF gives us no channel names/colours; synthesise defaults.
     let channels_meta = vec![ChannelMeta::default(); dims.c];
 
+    let mut notes = calibration.notes;
+    notes.extend(count_notes);
+
     let scene = SceneMeta {
         dims,
         dtype,
         samples: colour.samples as u32,
         px_size_um: calibration.px_size_um,
-        notes: calibration.notes,
+        notes,
         channels: channels_meta,
         palette: colour.palette,
         name: String::new(), // filled in by the reader
