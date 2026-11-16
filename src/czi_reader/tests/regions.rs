@@ -17,10 +17,10 @@ fn crafted_mosaic_extreme_start_opens_plane_refuses_region_ok() {
     let far_x = (i32::MIN as i64).unsigned_abs() as usize;
     assert_eq!(scene.dims.x, far_x + 2);
     assert_eq!(scene.dims.y, 2);
-    // The composed plane is past the 4 GiB cap: plane() refuses it cleanly, never by an overflow panic.
+    // The composed plane is past the 4 GiB cap and its width is past the scene ceiling: plane() names the width.
     assert!(matches!(
         reader.plane(0, 0, 0, 0),
-        Err(Error::OversizedAllocation { .. })
+        Err(Error::SceneEdgeTooLarge { axis: "wide", .. })
     ));
     // Tile B sits at scene-x 2^31; the bounded window decodes it through the i64 path, skipping tile A.
     let b = reader.region(0, 0, 0, 0, PixelRect::new(far_x, 0, 2, 2)).unwrap();

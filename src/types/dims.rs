@@ -30,19 +30,36 @@ impl Dims5 {
     /// `dtype` is the per-sample type: an RGB24 plane is `(U8, 3)` and an RGB48 plane is `(U16, 3)`.
     pub fn checked_plane_bytes_samples(&self, dtype: DType, samples: u32) -> Result<usize> {
         match self.plane_bytes(dtype, samples) {
-            // Overflow is an oversize refusal, not a panic.
+            // Overflow is an oversize refusal, not a panic, and keeps its requested-size diagnosis.
             None => Err(Error::OversizedAllocation {
                 requested: usize::MAX,
                 cap: crate::guard::MAX_DECODED_PLANE_BYTES,
             }),
-            Some(b) if b > crate::guard::MAX_DECODED_PLANE_BYTES => {
-                Err(Error::OversizedAllocation {
-                    requested: b,
-                    cap: crate::guard::MAX_DECODED_PLANE_BYTES,
-                })
-            }
+            Some(b) if b > crate::guard::MAX_DECODED_PLANE_BYTES => Err(self.too_large(b)),
             Some(b) => Ok(b),
         }
+    }
+
+    /// An edge above the ceiling is named, since it is the cause of the refusal; otherwise the plane is only too large.
+    fn too_large(&self, bytes: usize) -> Error {
+        match self.edge_above_ceiling() {
+            Some((axis, edge)) => Error::SceneEdgeTooLarge {
+                axis,
+                edge,
+                ceiling: crate::guard::MAX_SCENE_DIM,
+            },
+            None => Error::OversizedAllocation {
+                requested: bytes,
+                cap: crate::guard::MAX_DECODED_PLANE_BYTES,
+            },
+        }
+    }
+
+    /// The width is named before the height when both edges are above the ceiling.
+    fn edge_above_ceiling(&self) -> Option<(&'static str, usize)> {
+        [("wide", self.x), ("tall", self.y)]
+            .into_iter()
+            .find(|&(_, edge)| edge > crate::guard::MAX_SCENE_DIM)
     }
 
     /// Refused only on overflow: the ceiling applies where a plane is materialised; over-ceiling scenes serve windows.

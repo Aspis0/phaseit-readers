@@ -103,6 +103,83 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_plane_wider_than_the_edge_ceiling_names_its_width() {
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 5_000,
+            x: MAX_SCENE_DIM + 1,
+        };
+        match checked_plane_alloc(&dims, DType::U8) {
+            Err(Error::SceneEdgeTooLarge {
+                axis,
+                edge,
+                ceiling,
+            }) => assert_eq!(
+                (axis, edge, ceiling),
+                ("wide", MAX_SCENE_DIM + 1, MAX_SCENE_DIM)
+            ),
+            other => panic!("expected SceneEdgeTooLarge on the width, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_plane_taller_than_the_edge_ceiling_names_its_height() {
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: MAX_SCENE_DIM + 1,
+            x: 5_000,
+        };
+        match checked_plane_alloc(&dims, DType::U8) {
+            Err(Error::SceneEdgeTooLarge { axis, edge, .. }) => {
+                assert_eq!((axis, edge), ("tall", MAX_SCENE_DIM + 1));
+            }
+            other => panic!("expected SceneEdgeTooLarge on the height, got {other:?}"),
+        }
+    }
+
+    /// An edge above the ceiling that does not make the plane too large is not refused, as before.
+    #[test]
+    fn a_wide_plane_that_fits_still_passes() {
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 1,
+            x: MAX_SCENE_DIM + 1,
+        };
+        assert_eq!(
+            checked_plane_alloc(&dims, DType::U8).unwrap(),
+            MAX_SCENE_DIM + 1
+        );
+    }
+
+    #[test]
+    fn a_plane_only_too_large_keeps_the_generic_sentence() {
+        let dims = Dims5 {
+            t: 1,
+            c: 1,
+            z: 1,
+            y: 100_000,
+            x: 100_000,
+        };
+        let error = checked_plane_alloc(&dims, DType::F32).unwrap_err();
+        assert!(
+            matches!(error, Error::OversizedAllocation { .. }),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .starts_with("oversized allocation refused"),
+            "{error}"
+        );
+    }
+
     /// The `.nd` ceilings are the ones the reader can hold: a stage position and a wavelength cost
     /// the reader a scene and a channel each, and the plane cap bounds their product.
     #[test]
