@@ -29,7 +29,7 @@ pub struct SceneMeta {
     /// Samples per pixel (`1` grey, `3` RGB). CZI and TIFF interleave colour samples; LSM and LIF map them to `dims.c`.
     pub samples: u32,
     pub px_size_um: Option<PxSizeUm>,
-    /// Calibration the file stated but the reader could not use: no file path, no pixel value.
+    /// Calibration the file stated but the reader could not use, or a fact about what reading the file costs; no file path, no pixel value.
     pub notes: Vec<String>,
     pub channels: Vec<ChannelMeta>,
     /// The palette of an indexed scene: `palette[i]` is the RGB of index `i`; `None` otherwise.

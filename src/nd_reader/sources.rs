@@ -15,7 +15,7 @@ use crate::stk_reader::StkReader;
 use crate::tiff_reader::TiffReader;
 use crate::types::{DType, ImageReader};
 
-/// Fewest image files a dataset keeps open: a few files cover a dataset read plane after plane.
+/// Fewest open slots a dataset is sized for, whatever its file count: a three-file dataset gets eight, not three.
 const MIN_OPEN_MEMBERS: usize = 8;
 
 /// The geometry every image file of a dataset shares: its pixel type, its sample count and its x/y extent.
