@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The image files of a dataset: the readers kept open for the next plane, and the geometry every file shares.
 
+use std::cell::Cell;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -131,4 +132,90 @@ fn a_file_of_another_size_is_refused_by_its_name() {
         Ok(_) => panic!("a file of another size is refused"),
     };
     assert!(error.to_string().contains("file.TIF"), "{error}");
+}
+
+/// The error an open gives a process out of file handles.
+fn out_of_handles_error() -> Error {
+    Error::Io(std::io::Error::from_raw_os_error(OUT_OF_HANDLES[0]))
+}
+
+/// A handle shortage on the first open gives back the least recently used file's handle, and the file opens again.
+#[test]
+fn a_handle_shortage_evicts_the_least_recently_used_file_and_retries_once() {
+    let folder = folder("handles");
+    let [a, b] = ["a.TIF", "b.TIF"].map(|name| {
+        let path = folder.0.join(name);
+        write_tiff(&path);
+        path
+    });
+    let sources = Sources::new(geometry(), MIN_OPEN_MEMBERS);
+    sources.reader(&a).expect("a is opened");
+    let attempts = Cell::new(0);
+    let opener = |path: &Path| {
+        attempts.set(attempts.get() + 1);
+        if attempts.get() == 1 {
+            Err(out_of_handles_error())
+        } else {
+            open_reader(path)
+        }
+    };
+    sources
+        .reader_with(&b, opener)
+        .expect("b is opened once a gives up its handle");
+    assert_eq!(attempts.get(), 2, "one retry");
+    let open = sources
+        .open
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let kept: Vec<&Path> = open.iter().map(|(path, _)| path.as_path()).collect();
+    assert_eq!(kept, [b.as_path()], "a was the least recently used file");
+}
+
+/// A shortage that persists through the retry is reported as a shortage, not as a file that cannot be read.
+#[test]
+fn a_shortage_that_persists_says_the_process_ran_out_of_handles() {
+    let folder = folder("exhausted");
+    let [a, b] = ["a.TIF", "b.TIF"].map(|name| {
+        let path = folder.0.join(name);
+        write_tiff(&path);
+        path
+    });
+    let sources = Sources::new(geometry(), MIN_OPEN_MEMBERS);
+    sources.reader(&a).expect("a is opened");
+    let attempts = Cell::new(0);
+    let error = match sources.reader_with(&b, |_| {
+        attempts.set(attempts.get() + 1);
+        Err(out_of_handles_error())
+    }) {
+        Err(error) => error,
+        Ok(_) => panic!("a file that cannot be opened is refused"),
+    };
+    assert_eq!(attempts.get(), 2, "one retry, no more");
+    let text = error.to_string();
+    assert!(text.contains("ran out of file handles"), "{text}");
+    assert!(!text.contains("could not be read"), "{text}");
+}
+
+/// Only a handle shortage is retried: a file that will not open is named as unreadable at once.
+#[test]
+fn a_file_that_will_not_open_is_not_retried() {
+    let folder = folder("unreadable");
+    let [a, missing] = ["a.TIF", "missing.TIF"].map(|name| folder.0.join(name));
+    write_tiff(&a);
+    let sources = Sources::new(geometry(), MIN_OPEN_MEMBERS);
+    sources.reader(&a).expect("a is opened");
+    let attempts = Cell::new(0);
+    let error = match sources.reader_with(&missing, |candidate: &Path| {
+        attempts.set(attempts.get() + 1);
+        open_reader(candidate)
+    }) {
+        Err(error) => error,
+        Ok(_) => panic!("a file that does not exist is refused"),
+    };
+    assert_eq!(attempts.get(), 1, "no retry for a file that will not open");
+    let text = error.to_string();
+    assert!(
+        text.contains("missing.TIF") && text.contains("could not be read"),
+        "{text}"
+    );
 }

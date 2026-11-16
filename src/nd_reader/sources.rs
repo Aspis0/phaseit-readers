@@ -52,6 +52,15 @@ impl Sources {
 
     /// The reader of the image file at `path`, opened on first use.
     pub(super) fn reader(&self, path: &Path) -> Result<Arc<dyn ImageReader>> {
+        self.reader_with(path, open_reader)
+    }
+
+    /// `reader` with the opener as a parameter, so a test can make an open fail the way the OS does.
+    fn reader_with(
+        &self,
+        path: &Path,
+        opener: impl Fn(&Path) -> Result<Arc<dyn ImageReader>>,
+    ) -> Result<Arc<dyn ImageReader>> {
         let mut open = self.open.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(at) = open.iter().position(|(known, _)| known == path) {
             // A file read again moves to the back: the eviction below takes the least recently used one.
@@ -60,7 +69,7 @@ impl Sources {
             open.push(entry);
             return Ok(reader);
         }
-        let reader = open_file(path)?;
+        let reader = open_evicting(&mut open, path, opener)?;
         self.check(reader.as_ref(), path)?;
         open.push((path.to_path_buf(), Arc::clone(&reader)));
         // The bound keeps a dataset of many files from holding them all open.
@@ -113,23 +122,65 @@ pub(super) fn cache_note(files: usize, bound: usize) -> Option<String> {
 
 /// The reader of one image file: a z-series is a MetaMorph STK, a single plane a plain TIFF. The dataset names the
 /// files it lists, and the listing matches the name whatever its case, so the file's own extension names the reader.
-pub(super) fn open_file(path: &Path) -> Result<Arc<dyn ImageReader>> {
+fn open_reader(path: &Path) -> Result<Arc<dyn ImageReader>> {
     let z_stack = path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("stk"));
-    let opened = if z_stack {
+    if z_stack {
         StkReader::open(path).map(|reader| Arc::new(reader) as Arc<dyn ImageReader>)
     } else {
         TiffReader::open(path).map(|reader| Arc::new(reader) as Arc<dyn ImageReader>)
-    };
-    // The refusal names the file, never the path it was found under.
-    opened.map_err(|error| {
-        Error::Decode(format!(
-            "MetaMorph .nd: the image file {} could not be read: {error}",
-            file_name(path)
-        ))
-    })
+    }
 }
+
+/// The reader of one image file, or the refusal that names it.
+pub(super) fn open_file(path: &Path) -> Result<Arc<dyn ImageReader>> {
+    open_reader(path).map_err(|error| member_error(path, error))
+}
+
+/// Opens a member; when the process is out of handles, the least recently used member gives its handle back and the
+/// open is tried once more.
+fn open_evicting(
+    open: &mut Vec<(PathBuf, Arc<dyn ImageReader>)>,
+    path: &Path,
+    opener: impl Fn(&Path) -> Result<Arc<dyn ImageReader>>,
+) -> Result<Arc<dyn ImageReader>> {
+    match opener(path) {
+        Err(error) if out_of_handles(&error) && !open.is_empty() => {
+            open.remove(0);
+            opener(path).map_err(|error| member_error(path, error))
+        }
+        other => other.map_err(|error| member_error(path, error)),
+    }
+}
+
+/// The refusal for a member that will not open. It names the file, never the path it was found under, and a shortage
+/// of handles is the process's, so it is not reported as a file that cannot be read.
+fn member_error(path: &Path, error: Error) -> Error {
+    let name = file_name(path);
+    if out_of_handles(&error) {
+        Error::Decode(format!(
+            "MetaMorph .nd: the process ran out of file handles opening the image file {name}: {error}"
+        ))
+    } else {
+        Error::Decode(format!(
+            "MetaMorph .nd: the image file {name} could not be read: {error}"
+        ))
+    }
+}
+
+/// Whether an open failed for want of file handles in this process.
+fn out_of_handles(error: &Error) -> bool {
+    matches!(error, Error::Io(io) if io.raw_os_error().is_some_and(|code| OUT_OF_HANDLES.contains(&code)))
+}
+
+/// OS codes for a process out of file handles: EMFILE and ENFILE on Unix (24 and 23 on Linux and macOS).
+#[cfg(not(windows))]
+const OUT_OF_HANDLES: &[i32] = &[24, 23];
+
+/// ERROR_TOO_MANY_OPEN_FILES on Windows; the kernel's no-resources code is not claimed here.
+#[cfg(windows)]
+const OUT_OF_HANDLES: &[i32] = &[4];
 
 /// The name of a file, without the directory it sits in.
 fn file_name(path: &Path) -> String {

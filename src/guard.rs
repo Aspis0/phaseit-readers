@@ -37,8 +37,9 @@ pub const MAX_ND_AXIS_LEN: usize = 65_536;
 /// memory, and an acquisition folder holds thousands of files, not millions.
 pub const MAX_ND_LISTING_ENTRIES: usize = 100_000;
 
-/// Most MetaMorph `.nd` image files kept open at once (256): each holds a handle the caller shares, and the crate
-/// has no memory account of its own. Measured on Windows: an open member costs about 1 KB of heap and one handle.
+/// Most MetaMorph `.nd` image files one dataset keeps open (256). The budget is per dataset, not per process: each open
+/// file holds a handle the caller shares, so datasets open together add up. Measured on Windows: about 1 KB of heap and
+/// one handle per open member.
 pub const MAX_ND_OPEN_MEMBERS: usize = 256;
 
 /// Byte size of one plane, refused on overflow or above [`MAX_DECODED_PLANE_BYTES`]; call it BEFORE allocating.
