@@ -27,6 +27,14 @@ pub enum Error {
     #[error("oversized allocation refused: requested {requested} bytes, cap {cap} bytes")]
     OversizedAllocation { requested: usize, cap: usize },
 
+    /// A plane refused because one scene edge exceeds the ceiling the crate reads; `axis` is "wide" or "tall".
+    #[error("the scene is {edge} px {axis}; the crate reads edges up to {ceiling} px")]
+    SceneEdgeTooLarge {
+        axis: &'static str,
+        edge: usize,
+        ceiling: usize,
+    },
+
     #[error("scene index {scene} out of range (file has {count} scene(s))")]
     SceneOutOfRange { scene: usize, count: usize },
 

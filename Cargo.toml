@@ -1,6 +1,6 @@
 [package]
 name = "phasit-imread"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 # The MSRV this crate builds on: `as_chunks` (Rust 1.88) is the newest API it
 # uses, and no dependency of its graph declares a higher one - the highest is

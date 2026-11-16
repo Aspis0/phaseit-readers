@@ -307,6 +307,7 @@ fn error_kind(error: &Error) -> &'static str {
         Error::Decode(_) => "decode",
         Error::Parse(_) => "parse",
         Error::OversizedAllocation { .. } => "oversized_allocation",
+        Error::SceneEdgeTooLarge { .. } => "scene_edge_too_large",
         Error::SceneOutOfRange { .. } => "scene_out_of_range",
         Error::OutOfRange { .. } => "out_of_range",
         Error::Cancelled => "cancelled",
