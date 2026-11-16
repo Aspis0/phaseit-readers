@@ -86,11 +86,7 @@ fn the_least_recently_used_file_is_evicted_first() {
 
 #[test]
 fn the_bound_follows_the_files_within_the_floor_and_the_ceiling() {
-    assert_eq!(
-        open_bound(3),
-        MIN_OPEN_MEMBERS,
-        "a few files keep the floor"
-    );
+    assert_eq!(open_bound(3), 8, "a few files keep the floor of eight");
     assert_eq!(
         open_bound(100),
         100,
